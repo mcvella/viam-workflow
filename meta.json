@@ -1,0 +1,13 @@
+{
+    "module_id": "mcvella:viam-workflow",
+    "visibility": "public",
+    "url": "https://github.com/mcvella/viam-workflow",
+    "description": "A Viam workflow builder",
+    "applications": [
+      {
+        "name": "workflow",
+        "type": "single_machine",
+        "entrypoint": "/build/index.html"
+      }
+    ]
+  }
