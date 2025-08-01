@@ -47,6 +47,7 @@
 	],
 	"dependencies": {
 		"@sveltejs/adapter-static": "^3.0.8",
+		"@viamrobotics/sdk": "^0.46.1-b.0",
 		"js-cookie": "^3.0.5"
 	}
 }
