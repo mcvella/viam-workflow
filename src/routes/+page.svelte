@@ -8,10 +8,10 @@
   console.log("Svelte component loaded, viamClient:", viamClient);
 
   // Get the event manager name from query parameter
-  $: editEventManagerName = $page.url.searchParams.get('edit');
+  $: editEventManagerName = typeof window !== 'undefined' ? $page.url.searchParams.get('edit') : null;
 
   // Auto-open editing form if edit parameter is provided
-  $: if (editEventManagerName && eventManagers.length > 0 && !showEventManagerForm && !editingEventManager && !isClosingForm) {
+  $: if (typeof window !== 'undefined' && editEventManagerName && eventManagers.length > 0 && !showEventManagerForm && !editingEventManager && !isClosingForm) {
     console.log("Reactive statement triggered!");
     console.log("editEventManagerName:", editEventManagerName);
     console.log("eventManagers.length:", eventManagers.length);
@@ -150,13 +150,37 @@
   let showAddEventNotification = false;
   let showAddEventAction = false;
 
+  // Edit existing items states
+  let editingRuleIndex: number | null = null;
+  let editingNotificationIndex: number | null = null;
+  let editingActionIndex: number | null = null;
+  let editingRule: Rule | null = null;
+  let editingNotification: Notification | null = null;
+  let editingAction: Action | null = null;
+  let showEditEventRule = false;
+  let showEditEventNotification = false;
+  let showEditEventAction = false;
+
   // Flag to prevent reactive statement from re-opening form during close
   let isClosingForm = false;
 
   // Reactive lists for dropdowns
   $: cameras = machineComponents.filter(c => c.api.startsWith('rdk:component:camera')).map(c => c.name);
-  $: visionServices = machineComponents.filter(c => c.api.startsWith('rdk:service:vision')).map(c => c.name);
+  $: visionServices = machineComponents.filter(c => 
+    c.api.startsWith('rdk:service:vision') || 
+    c.api.includes('vision') ||
+    c.api.includes('detector') ||
+    c.api.includes('classifier') ||
+    c.api.includes('tracker')
+  ).map(c => c.name);
   $: allResources = machineComponents.map(c => c.name);
+
+  $: {
+    console.log('Machine components:', machineComponents);
+    console.log('Machine components APIs:', machineComponents.map(c => ({ name: c.name, api: c.api })));
+    console.log('Cameras:', cameras);
+    console.log('Vision services:', visionServices);
+  }
 
   $: callRuleApi = machineComponents.find(c => c.name === newRule.resource)?.api;
   $: callRuleMethods = (() => {
@@ -189,53 +213,57 @@
     
     // Add resources from rules
     config.events.forEach(event => {
-      event.rules.forEach(rule => {
-        if (rule.camera) {
-          const component = machineComponents.find(c => c.name === rule.camera);
-          if (component) {
-            autoResources[rule.camera] = {
-              type: 'component',
-              subtype: component.api.split(':')[2] || 'camera'
-            };
-          }
-        }
-        if (rule.detector || rule.classifier || rule.tracker) {
-          const serviceName = rule.detector || rule.classifier || rule.tracker;
-          if (serviceName) {
-            const service = machineComponents.find(c => c.name === serviceName);
-            if (service) {
-              autoResources[serviceName] = {
-                type: 'service',
-                subtype: service.api.split(':')[2] || 'vision'
+      if (event.rules && Array.isArray(event.rules)) {
+        event.rules.forEach(rule => {
+          if (rule.camera) {
+            const component = machineComponents.find(c => c.name === rule.camera);
+            if (component) {
+              autoResources[rule.camera] = {
+                type: 'component',
+                subtype: component.api.split(':')[2] || 'camera'
               };
             }
           }
-        }
-        if (rule.resource) {
-          const component = machineComponents.find(c => c.name === rule.resource);
-          if (component) {
-            autoResources[rule.resource] = {
-              type: 'component',
-              subtype: component.api.split(':')[2] || 'generic'
-            };
+          if (rule.detector || rule.classifier || rule.tracker) {
+            const serviceName = rule.detector || rule.classifier || rule.tracker;
+            if (serviceName) {
+              const service = machineComponents.find(c => c.name === serviceName);
+              if (service) {
+                autoResources[serviceName] = {
+                  type: 'service',
+                  subtype: service.api.split(':')[2] || 'vision'
+                };
+              }
+            }
           }
-        }
-      });
+          if (rule.resource) {
+            const component = machineComponents.find(c => c.name === rule.resource);
+            if (component) {
+              autoResources[rule.resource] = {
+                type: 'component',
+                subtype: component.api.split(':')[2] || 'generic'
+              };
+            }
+          }
+        });
+      }
     });
     
     // Add resources from actions
     config.events.forEach(event => {
-      event.actions.forEach(action => {
-        if (action.resource) {
-          const component = machineComponents.find(c => c.name === action.resource);
-          if (component) {
-            autoResources[action.resource] = {
-              type: 'component',
-              subtype: component.api.split(':')[2] || 'generic'
-            };
+      if (event.actions && Array.isArray(event.actions)) {
+        event.actions.forEach(action => {
+          if (action.resource) {
+            const component = machineComponents.find(c => c.name === action.resource);
+            if (component) {
+              autoResources[action.resource] = {
+                type: 'component',
+                subtype: component.api.split(':')[2] || 'generic'
+              };
+            }
           }
-        }
-      });
+        });
+      }
     });
     
     config.resources = autoResources;
@@ -250,9 +278,16 @@
         if (machineConfig) {
           console.log("Machine config loaded:", machineConfig);
           eventManagers = findEventManagers(machineConfig);
-          machineComponents = machineConfig.config?.components || [];
+          const components = machineConfig.config?.components || [];
+          const services = machineConfig.config?.services || [];
+          machineComponents = [...components, ...services];
           console.log("Found event managers:", eventManagers);
           console.log("Found machine components:", machineComponents);
+          console.log("Machine config structure:", {
+            components: components.length,
+            services: services.length,
+            modules: machineConfig.config?.modules?.length || 0
+          });
         } else {
           error = "Failed to load machine configuration";
         }
@@ -284,7 +319,12 @@
         sms_module: eventManager.config.sms_module,
         push_module: eventManager.config.push_module,
         resources: eventManager.config.resources || {},
-        events: eventManager.config.events || [],
+        events: (eventManager.config.events || []).map(event => ({
+          ...event,
+          rules: event.rules || [],
+          notifications: event.notifications || [],
+          actions: event.actions || [],
+        })),
         enable_backoff_schedule: eventManager.config.enable_backoff_schedule,
         backoff_schedule: eventManager.config.backoff_schedule || {},
       };
@@ -368,6 +408,69 @@
     }
   }
 
+  function editEventRule(ruleIndex: number) {
+    if (editingEvent) {
+      editingRuleIndex = ruleIndex;
+      editingRule = { ...editingEvent.rules[ruleIndex] };
+      showEditEventRule = true;
+    }
+  }
+
+  function editEventNotification(notifIndex: number) {
+    if (editingEvent) {
+      editingNotificationIndex = notifIndex;
+      editingNotification = { ...editingEvent.notifications[notifIndex] };
+      showEditEventNotification = true;
+    }
+  }
+
+  function editEventAction(actionIndex: number) {
+    if (editingEvent) {
+      editingActionIndex = actionIndex;
+      editingAction = { ...editingEvent.actions[actionIndex] };
+      showEditEventAction = true;
+    }
+  }
+
+  function saveEventRule() {
+    if (editingRuleIndex !== null && editingRule && editingEvent) {
+      editingEvent.rules[editingRuleIndex] = { ...editingRule };
+      closeEventRuleEdit();
+    }
+  }
+
+  function saveEventNotification() {
+    if (editingNotificationIndex !== null && editingNotification && editingEvent) {
+      editingEvent.notifications[editingNotificationIndex] = { ...editingNotification };
+      closeEventNotificationEdit();
+    }
+  }
+
+  function saveEventAction() {
+    if (editingActionIndex !== null && editingAction && editingEvent) {
+      editingEvent.actions[editingActionIndex] = { ...editingAction };
+      closeEventActionEdit();
+    }
+  }
+
+  function closeEventRuleEdit() {
+    editingRuleIndex = null;
+    editingRule = null;
+    showEditEventRule = false;
+  }
+
+  function closeEventNotificationEdit() {
+    editingNotificationIndex = null;
+    editingNotification = null;
+    showEditEventNotification = false;
+  }
+
+  function closeEventActionEdit() {
+    editingActionIndex = null;
+    editingAction = null;
+    showEditEventAction = false;
+  }
+
   async function closeEventManagerForm() {
     console.log("Closing event manager form...");
     
@@ -382,6 +485,15 @@
     showAddEventRule = false;
     showAddEventNotification = false;
     showAddEventAction = false;
+    showEditEventRule = false;
+    showEditEventNotification = false;
+    showEditEventAction = false;
+    editingRuleIndex = null;
+    editingNotificationIndex = null;
+    editingActionIndex = null;
+    editingRule = null;
+    editingNotification = null;
+    editingAction = null;
     saveError = '';
     
     console.log("Form state cleared, showEventManagerForm:", showEventManagerForm);
@@ -581,6 +693,9 @@
   }
 
   function getEditUrl(eventManagerName: string): string {
+    if (typeof window === 'undefined') {
+      return '#';
+    }
     const url = new URL(window.location.href);
     url.searchParams.set('edit', eventManagerName);
     return url.toString();
@@ -627,7 +742,13 @@
     </div>
 
     <div class="form-section">
-      <div class="section-header" on:click={() => showAdvancedSettings = !showAdvancedSettings}>
+      <div class="section-header" 
+           on:click={() => showAdvancedSettings = !showAdvancedSettings}
+           on:keydown={(e) => e.key === 'Enter' && (showAdvancedSettings = !showAdvancedSettings)}
+           role="button"
+           tabindex="0"
+           aria-expanded={showAdvancedSettings}
+           aria-controls="advanced-settings">
         <h2>Advanced Settings</h2>
         <span class="toggle-icon">{showAdvancedSettings ? '▼' : '▶'}</span>
       </div>
@@ -811,7 +932,10 @@
                           <div class="item-card">
                             <div class="item-header">
                               <h5>Rule {ruleIndex + 1}: {rule.type}</h5>
-                              <button class="remove-btn" on:click={() => removeEventRule(ruleIndex)}>Remove</button>
+                              <div class="item-actions">
+                                <button class="btn btn-secondary btn-sm" on:click={() => editEventRule(ruleIndex)}>Edit</button>
+                                <button class="remove-btn" on:click={() => removeEventRule(ruleIndex)}>Remove</button>
+                              </div>
                             </div>
                             <div class="item-details">
                               {#if rule.camera}<p>Camera: {rule.camera}</p>{/if}
@@ -842,7 +966,10 @@
                           <div class="item-card">
                             <div class="item-header">
                               <h5>Notification {notifIndex + 1}: {notification.type}</h5>
-                              <button class="remove-btn" on:click={() => removeEventNotification(notifIndex)}>Remove</button>
+                              <div class="item-actions">
+                                <button class="btn btn-secondary btn-sm" on:click={() => editEventNotification(notifIndex)}>Edit</button>
+                                <button class="remove-btn" on:click={() => removeEventNotification(notifIndex)}>Remove</button>
+                              </div>
                             </div>
                             <div class="item-details">
                               {#if notification.to}<p>To: {notification.to.join(', ')}</p>{/if}
@@ -869,7 +996,10 @@
                           <div class="item-card">
                             <div class="item-header">
                               <h5>Action {actionIndex + 1}</h5>
-                              <button class="remove-btn" on:click={() => removeEventAction(actionIndex)}>Remove</button>
+                              <div class="item-actions">
+                                <button class="btn btn-secondary btn-sm" on:click={() => editEventAction(actionIndex)}>Edit</button>
+                                <button class="remove-btn" on:click={() => removeEventAction(actionIndex)}>Remove</button>
+                              </div>
                             </div>
                             <div class="item-details">
                               <p>Resource: {action.resource}</p>
@@ -962,7 +1092,7 @@
               <p>Events: {eventManager.config?.events?.length || 0}</p>
             </div>
             <div class="event-manager-actions">
-              <a href={getEditUrl(eventManager.name)} class="btn btn-primary">Edit</a>
+              <a href={typeof window !== 'undefined' ? getEditUrl(eventManager.name) : '#'} class="btn btn-primary">Edit</a>
             </div>
           </div>
         {/each}
@@ -1177,6 +1307,225 @@
       <div class="button-group">
         <button class="btn btn-primary" on:click={addAction}>Add Action</button>
         <button class="btn btn-secondary" on:click={() => showAddEventAction = false}>Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Edit Forms -->
+{#if showEditEventRule && editingRule}
+  <div class="add-form-overlay">
+    <div class="add-form">
+      <h5>Edit Rule</h5>
+      <div class="form-group">
+        <label for="edit_rule_type">Rule Type:</label>
+        <select id="edit_rule_type" bind:value={editingRule.type}>
+          <option value="detection">Detection</option>
+          <option value="classification">Classification</option>
+          <option value="tracker">Tracker</option>
+          <option value="time">Time</option>
+          <option value="call">Call</option>
+        </select>
+      </div>
+      
+      {#if ['detection', 'classification', 'tracker'].includes(editingRule.type)}
+        <div class="form-group">
+          <label for="edit_camera">Camera:</label>
+          <select id="edit_camera" bind:value={editingRule.camera}>
+            <option value="">Select a camera</option>
+            {#each cameras as cameraName}
+              <option value={cameraName}>{cameraName}</option>
+            {/each}
+          </select>
+        </div>
+        
+        {#if editingRule.type === 'detection'}
+          <div class="form-group">
+            <label for="edit_detector">Detector:</label>
+            <select id="edit_detector" bind:value={editingRule.detector}>
+              <option value="">Select a vision service</option>
+              {#each visionServices as serviceName}
+                <option value={serviceName}>{serviceName}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+        
+        {#if editingRule.type === 'classification'}
+          <div class="form-group">
+            <label for="edit_classifier">Classifier:</label>
+             <select id="edit_classifier" bind:value={editingRule.classifier}>
+              <option value="">Select a vision service</option>
+              {#each visionServices as serviceName}
+                <option value={serviceName}>{serviceName}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+        
+        {#if editingRule.type === 'tracker'}
+          <div class="form-group">
+            <label for="edit_tracker">Tracker:</label>
+            <select id="edit_tracker" bind:value={editingRule.tracker}>
+              <option value="">Select a vision service</option>
+              {#each visionServices as serviceName}
+                <option value={serviceName}>{serviceName}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+        
+        <div class="form-group">
+          <label for="edit_class_regex">Class Regex:</label>
+          <input id="edit_class_regex" type="text" bind:value={editingRule.class_regex} placeholder=".*" />
+        </div>
+        
+        <div class="form-group">
+          <label for="edit_confidence_pct">Confidence %:</label>
+          <input id="edit_confidence_pct" type="number" bind:value={editingRule.confidence_pct} min="0" max="1" step="0.1" />
+        </div>
+      {/if}
+      
+      {#if editingRule.type === 'call'}
+        <div class="form-group">
+          <label for="edit_resource">Resource:</label>
+          <select id="edit_resource" bind:value={editingRule.resource}>
+            <option value="">Select a resource</option>
+            {#each allResources as resourceName}
+              <option value={resourceName}>{resourceName}</option>
+            {/each}
+          </select>
+        </div>
+        
+        <div class="form-group">
+          <label for="edit_method">Method:</label>
+          <select id="edit_method" bind:value={editingRule.method} disabled={!editingRule.resource}>
+            <option value="">Select a method</option>
+            {#each callRuleMethods as methodName}
+              <option value={methodName}>{methodName}</option>
+            {/each}
+          </select>
+        </div>
+        
+        <div class="form-group">
+          <label for="edit_payload">Payload (JSON):</label>
+          <input id="edit_payload" type="text" bind:value={editingRule.payload} placeholder="JSON object, e.g. 'key': 'value'" />
+        </div>
+      {/if}
+      
+      <div class="button-group">
+        <button class="btn btn-primary" on:click={saveEventRule}>Save Rule</button>
+        <button class="btn btn-secondary" on:click={closeEventRuleEdit}>Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showEditEventNotification && editingNotification}
+  <div class="add-form-overlay">
+    <div class="add-form">
+      <h5>Edit Notification</h5>
+      <div class="form-group">
+        <label for="edit_notification_type">Type:</label>
+        <select id="edit_notification_type" bind:value={editingNotification.type}>
+          <option value="sms">SMS</option>
+          <option value="email">Email</option>
+          <option value="webhook_get">Webhook GET</option>
+          <option value="push">Push</option>
+        </select>
+      </div>
+      
+      {#if editingNotification.type === 'sms' || editingNotification.type === 'email'}
+        <div class="form-group">
+          <label for="edit_preset">Preset:</label>
+          <input id="edit_preset" type="text" bind:value={editingNotification.preset} placeholder="e.g., twilio_sms" />
+        </div>
+
+        <div class="form-group">
+          <label for="edit_to">To (comma-separated):</label>
+          <input id="edit_to" type="text" value={editingNotification?.to?.join(', ') || ''} on:input={(e) => {
+            if (editingNotification && e.target instanceof HTMLInputElement) {
+              editingNotification.to = e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean);
+            }
+          }} placeholder="phone@example.com, +1234567890" />
+        </div>
+      {/if}
+      
+      {#if editingNotification.type === 'webhook_get'}
+        <div class="form-group">
+          <label for="edit_url">URL:</label>
+          <input id="edit_url" type="url" bind:value={editingNotification.url} placeholder="https://example.com/webhook" />
+        </div>
+      {/if}
+      
+      {#if editingNotification.type === 'push'}
+        <div class="form-group">
+          <label for="edit_fcm_tokens">FCM Tokens (comma-separated):</label>
+          <input id="edit_fcm_tokens" type="text" value={editingNotification?.fcm_tokens?.join(', ') || ''} on:input={(e) => {
+            if (editingNotification && e.target instanceof HTMLInputElement) {
+              editingNotification.fcm_tokens = e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean);
+            }
+          }} placeholder="token1, token2" />
+        </div>
+      {/if}
+      
+      <div class="form-group">
+        <label>
+          <input type="checkbox" bind:checked={editingNotification.include_image} />
+          Include Image
+        </label>
+      </div>
+      
+      <div class="button-group">
+        <button class="btn btn-primary" on:click={saveEventNotification}>Save Notification</button>
+        <button class="btn btn-secondary" on:click={closeEventNotificationEdit}>Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showEditEventAction && editingAction}
+  <div class="add-form-overlay">
+    <div class="add-form">
+      <h5>Edit Action</h5>
+      <div class="form-group">
+        <label for="edit_action_resource">Resource:</label>
+        <select id="edit_action_resource" bind:value={editingAction.resource}>
+          <option value="">Select a resource</option>
+          {#each allResources as resourceName}
+            <option value={resourceName}>{resourceName}</option>
+          {/each}
+        </select>
+      </div>
+      
+      <div class="form-group">
+        <label for="edit_action_method">Method:</label>
+        <select id="edit_action_method" bind:value={editingAction.method} disabled={!editingAction.resource}>
+          <option value="">Select a method</option>
+          {#each actionMethods as methodName}
+            <option value={methodName}>{methodName}</option>
+          {/each}
+        </select>
+      </div>
+      
+      <div class="form-group">
+        <label for="edit_action_payload">Payload (JSON):</label>
+        <input id="edit_action_payload" type="text" bind:value={editingAction.payload} placeholder="JSON object, e.g. 'key': 'value'" />
+      </div>
+      
+      <div class="form-group">
+        <label for="edit_when_secs">Delay (seconds):</label>
+        <input id="edit_when_secs" type="number" bind:value={editingAction.when_secs} min="-1" />
+      </div>
+      
+      <div class="form-group">
+        <label for="edit_response_match">Response Match (regex):</label>
+        <input id="edit_response_match" type="text" bind:value={editingAction.response_match} placeholder="optional" />
+      </div>
+      
+      <div class="button-group">
+        <button class="btn btn-primary" on:click={saveEventAction}>Save Action</button>
+        <button class="btn btn-secondary" on:click={closeEventActionEdit}>Cancel</button>
       </div>
     </div>
   </div>
@@ -1400,24 +1749,6 @@
     margin-top: 15px;
   }
 
-  .rule-item,
-  .notification-item,
-  .action-item {
-    background: white;
-    border: 1px solid #dee2e6;
-    border-radius: 6px;
-    padding: 15px;
-    margin-bottom: 10px;
-  }
-
-  .rule-item h3,
-  .notification-item h3,
-  .action-item h3 {
-    margin-top: 0;
-    color: #495057;
-    font-size: 16px;
-  }
-
   .help-text {
     color: #6c757d;
     font-size: 12px;
@@ -1473,13 +1804,6 @@
     margin-top: 15px;
     padding-top: 15px;
     border-top: 1px solid #e9ecef;
-  }
-
-  .resources-list h3 {
-    margin-top: 0;
-    color: #495057;
-    font-size: 16px;
-    margin-bottom: 10px;
   }
 
   .resource-item {
@@ -1564,17 +1888,6 @@
     font-size: 16px;
   }
 
-  .event-details {
-    flex-grow: 1;
-    margin-right: 20px;
-  }
-
-  .event-details p {
-    margin: 5px 0;
-    color: #6c757d;
-    font-size: 14px;
-  }
-
   .event-actions {
     display: flex;
     gap: 10px;
@@ -1601,28 +1914,6 @@
 
   .event-edit-form .form-group {
     margin-bottom: 10px;
-  }
-
-  .event-edit-form .button-group {
-    margin-top: 20px;
-  }
-
-  .event-section {
-    margin-top: 20px;
-    padding-top: 20px;
-    border-top: 1px solid #e9ecef;
-  }
-
-  .event-section h4 {
-    color: #495057;
-    margin-bottom: 15px;
-    font-size: 16px;
-  }
-
-  .event-section h5 {
-    color: #6c757d;
-    margin-bottom: 10px;
-    font-size: 14px;
   }
 
   /* New styles for event edit form layout */
@@ -1704,6 +1995,11 @@
     margin: 0;
     color: #495057;
     font-size: 14px;
+  }
+
+  .item-actions {
+    display: flex;
+    gap: 5px;
   }
 
   .item-details p {
