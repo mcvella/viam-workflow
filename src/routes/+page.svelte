@@ -1,9 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { page } from '$app/stores';
   import { viamClient, getMachineConfig, findEventManagers, saveEventManager } from '../lib/index.js';
   import resourceMethods from '../lib/resource_methods.json' with { type: 'json' };
 
   console.log("Svelte component loaded, viamClient:", viamClient);
+
+  // Get the event manager name from query parameter
+  $: editEventManagerName = $page.url.searchParams.get('edit');
+
+  // Auto-open editing form if edit parameter is provided
+  $: if (editEventManagerName && eventManagers.length > 0 && !showEventManagerForm) {
+    const eventManagerToEdit = eventManagers.find(em => em.name === editEventManagerName);
+    if (eventManagerToEdit) {
+      openEventManagerForm(eventManagerToEdit);
+    }
+  }
 
   interface Rule {
     type: 'detection' | 'classification' | 'tracker' | 'time' | 'call';
@@ -66,6 +78,11 @@
     actions: Action[];
     rules: Rule[];
     resources?: Record<string, {type: string, subtype: string}>;
+    mode?: string;
+    mode_override: {
+      mode: string;
+      until: string;
+    };
   }
 
   let config: EventConfig = {
@@ -79,6 +96,7 @@
     notifications: [],
     actions: [],
     rules: [],
+    mode_override: { mode: '', until: '' },
   };
 
   let showAddRule = false;
@@ -226,6 +244,8 @@
         rules: eventManager.config.rules || [],
         backoff_schedule: eventManager.config.backoff_schedule,
         resources: eventManager.config.resources || {},
+        mode: eventManager.config.mode,
+        mode_override: eventManager.config.mode_override || { mode: '', until: '' },
       };
     } else {
       // Create new config
@@ -243,6 +263,8 @@
         rules: [],
         backoff_schedule: {},
         resources: {},
+        mode: '',
+        mode_override: { mode: '', until: '' },
       };
     }
     showEventManagerForm = true;
@@ -253,6 +275,13 @@
     showEventManagerForm = false;
     editingEventManager = null;
     saveError = '';
+    
+    // Clear the edit query parameter when closing the form
+    if (editEventManagerName) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('edit');
+      window.history.replaceState({}, '', url.toString());
+    }
   }
 
   async function saveEventManagerConfig() {
@@ -288,6 +317,17 @@
         eventManagerConfig.resources = config.resources;
       }
 
+      // Add mode and overrides if they exist
+      if (config.mode) {
+        eventManagerConfig.mode = config.mode;
+      }
+      if (config.mode_override.mode || config.mode_override.until) {
+        eventManagerConfig.mode_override = {
+          mode: config.mode_override.mode,
+          until: config.mode_override.until
+        };
+      }
+
       // If editing, use the original name to identify which event manager to update
       const originalName = editingEventManager ? editingEventManager.name : null;
       const targetName = config.name; // This is the new name (might be the same or different)
@@ -318,7 +358,45 @@
 
   function addRule() {
     if (newRule.type) {
-      config.rules = [...config.rules, { ...newRule }];
+      // Create a clean rule object with only relevant fields for the rule type
+      const ruleToAdd: any = {
+        type: newRule.type
+      };
+
+      // Add fields based on rule type
+      if (['detection', 'classification', 'tracker'].includes(newRule.type)) {
+        if (newRule.camera) ruleToAdd.camera = newRule.camera;
+        if (newRule.class_regex) ruleToAdd.class_regex = newRule.class_regex;
+        if (newRule.confidence_pct !== undefined) ruleToAdd.confidence_pct = newRule.confidence_pct;
+        
+        if (newRule.type === 'detection' && newRule.detector) {
+          ruleToAdd.detector = newRule.detector;
+        }
+        if (newRule.type === 'classification' && newRule.classifier) {
+          ruleToAdd.classifier = newRule.classifier;
+        }
+        if (newRule.type === 'tracker' && newRule.tracker) {
+          ruleToAdd.tracker = newRule.tracker;
+        }
+        if (newRule.pause_on_known_secs !== undefined) {
+          ruleToAdd.pause_on_known_secs = newRule.pause_on_known_secs;
+        }
+      } else if (newRule.type === 'time') {
+        if (newRule.ranges && newRule.ranges.length > 0) {
+          ruleToAdd.ranges = newRule.ranges;
+        }
+      } else if (newRule.type === 'call') {
+        if (newRule.resource) ruleToAdd.resource = newRule.resource;
+        if (newRule.method) ruleToAdd.method = newRule.method;
+        if (newRule.payload) ruleToAdd.payload = newRule.payload;
+        if (newRule.result_path) ruleToAdd.result_path = newRule.result_path;
+        if (newRule.result_function) ruleToAdd.result_function = newRule.result_function;
+        if (newRule.result_operator) ruleToAdd.result_operator = newRule.result_operator;
+        if (newRule.result_value) ruleToAdd.result_value = newRule.result_value;
+        if (newRule.inverse_pause_secs !== undefined) ruleToAdd.inverse_pause_secs = newRule.inverse_pause_secs;
+      }
+
+      config.rules = [...config.rules, ruleToAdd];
       newRule = { type: 'detection' };
       showAddRule = false;
     }
@@ -364,6 +442,12 @@
 
   function removeAction(index: number) {
     config.actions = config.actions.filter((_, i) => i !== index);
+  }
+
+  function getEditUrl(eventManagerName: string): string {
+    const url = new URL(window.location.href);
+    url.searchParams.set('edit', eventManagerName);
+    return url.toString();
   }
 </script>
 
@@ -453,6 +537,30 @@
           <input id="rule_reset_count" type="number" bind:value={config.rule_reset_count} min="1" />
         </div>
       {/if}
+
+      <div class="form-group">
+        <label for="mode">
+          Mode:
+          <span class="help-tooltip" title="The operating mode for the event manager">?</span>
+        </label>
+        <input id="mode" type="text" bind:value={config.mode} placeholder="e.g., active, inactive" />
+      </div>
+
+      <div class="form-group">
+        <label for="mode_override">
+          Mode Override Mode:
+          <span class="help-tooltip" title="The mode to override with (e.g., inactive)">?</span>
+        </label>
+        <input id="mode_override" type="text" bind:value={config.mode_override.mode} placeholder="e.g., inactive" />
+      </div>
+
+      <div class="form-group">
+        <label for="mode_override_until">
+          Mode Override Until:
+          <span class="help-tooltip" title="ISO timestamp when the override should expire">?</span>
+        </label>
+        <input id="mode_override_until" type="datetime-local" bind:value={config.mode_override.until} />
+      </div>
     </div>
 
     <div class="form-section">
@@ -873,7 +981,7 @@
               <p>Actions: {eventManager.config.actions?.length || 0}</p>
             </div>
             <div class="event-manager-actions">
-              <button class="btn btn-primary" on:click={() => openEventManagerForm(eventManager)}>Edit</button>
+              <a href={getEditUrl(eventManager.name)} class="btn btn-primary">Edit</a>
             </div>
           </div>
         {/each}
