@@ -1520,8 +1520,6 @@
   .section-header:hover {
     background-color: #f8f9fa;
     border-radius: 4px;
-    padding: 10px;
-    margin: -10px -10px 5px -10px;
   }
 
   .section-header h2 {
