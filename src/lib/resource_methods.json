@@ -1,0 +1,118 @@
+{
+  "rdk:component:arm": [
+    "do_command",
+    "get_end_position",
+    "get_geometries",
+    "get_joint_positions",
+    "get_kinematics",
+    "is_moving",
+    "move_to_joint_positions",
+    "move_to_position",
+    "stop"
+  ],
+  "rdk:component:base": [
+    "do_command",
+    "get_geometries",
+    "get_properties",
+    "is_moving",
+    "move_straight",
+    "set_power",
+    "set_velocity",
+    "spin",
+    "stop"
+  ],
+  "rdk:component:board": [
+    "analog_by_name",
+    "digital_interrupt_by_name",
+    "do_command",
+    "get_geometries",
+    "gpio_pin_by_name",
+    "set_power_mode",
+    "stream_ticks"
+  ],
+  "rdk:component:camera": [
+    "do_command",
+    "get_geometries",
+    "get_image",
+    "get_images",
+    "get_point_cloud",
+    "get_properties"
+  ],
+  "rdk:component:gantry": [
+    "do_command",
+    "get_geometries",
+    "get_lengths",
+    "get_position",
+    "home",
+    "is_moving",
+    "move_to_position",
+    "stop"
+  ],
+  "rdk:component:gripper": [
+    "do_command",
+    "get_geometries",
+    "get_kinematics",
+    "grab",
+    "is_holding_something",
+    "is_moving",
+    "open",
+    "stop"
+  ],
+  "rdk:component:motor": [
+    "do_command",
+    "get_geometries",
+    "get_position",
+    "get_properties",
+    "go_for",
+    "go_to",
+    "is_moving",
+    "is_powered",
+    "reset_zero_position",
+    "set_power",
+    "set_rpm",
+    "stop"
+  ],
+  "rdk:component:sensor": [
+    "do_command",
+    "get_geometries",
+    "get_readings"
+  ],
+  "rdk:component:servo": [
+    "do_command",
+    "get_geometries",
+    "get_position",
+    "is_moving",
+    "move",
+    "stop"
+  ],
+  "rdk:service:vision": [
+    "capture_all_from_camera",
+    "do_command",
+    "get_classifications",
+    "get_classifications_from_camera",
+    "get_detections",
+    "get_detections_from_camera",
+    "get_object_point_clouds",
+    "get_properties",
+    "reset_channel"
+  ],
+  "rdk:service:slam": [
+    "do_command",
+    "get_internal_state",
+    "get_point_cloud_map",
+    "get_position",
+    "get_properties",
+    "reset_channel"
+  ],
+  "rdk:service:motion": [
+    "do_command",
+    "get_plan",
+    "get_pose",
+    "list_plan_statuses",
+    "move",
+    "move_on_globe",
+    "move_on_map",
+    "reset_channel",
+    "stop_plan"
+  ]
+}

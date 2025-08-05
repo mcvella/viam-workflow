@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { viamClient, getMachineConfig, findEventManagers, saveEventManager } from '../lib/index.js';
+  import resourceMethods from '../lib/resource_methods.json' with { type: 'json' };
 
   console.log("Svelte component loaded, viamClient:", viamClient);
 
@@ -84,6 +85,37 @@
   let editingEventManager: any = null;
   let saving = false;
   let saveError = '';
+  let machineComponents: any[] = [];
+
+  // Reactive lists for dropdowns
+  $: cameras = machineComponents.filter(c => c.api.startsWith('rdk:component:camera')).map(c => c.name);
+  $: visionServices = machineComponents.filter(c => c.api.startsWith('rdk:service:vision')).map(c => c.name);
+  $: allResources = machineComponents.map(c => c.name);
+
+  $: callRuleApi = machineComponents.find(c => c.name === newRule.resource)?.api;
+  $: callRuleMethods = (() => {
+    if (!callRuleApi) return [];
+    const methodsKey = Object.keys(resourceMethods).find(key => callRuleApi.startsWith(key));
+    if (!methodsKey) return [];
+    return (resourceMethods as Record<string, string[]>)[methodsKey] || [];
+  })();
+
+  $: actionApi = machineComponents.find(c => c.name === newAction.resource)?.api;
+  $: actionMethods = (() => {
+    if (!actionApi) return [];
+    const methodsKey = Object.keys(resourceMethods).find(key => actionApi.startsWith(key));
+    if (!methodsKey) return [];
+    return (resourceMethods as Record<string, string[]>)[methodsKey] || [];
+  })();
+
+  $: {
+    if (callRuleApi) {
+      console.log(`Resource: ${newRule.resource}, API: ${callRuleApi}, Methods:`, callRuleMethods);
+    }
+    if (actionApi) {
+      console.log(`Action Resource: ${newAction.resource}, API: ${actionApi}, Methods:`, actionMethods);
+    }
+  }
 
   onMount(async () => {
     if (viamClient) {
@@ -94,7 +126,9 @@
         if (machineConfig) {
           console.log("Machine config loaded:", machineConfig);
           eventManagers = findEventManagers(machineConfig);
+          machineComponents = machineConfig.config?.components || [];
           console.log("Found event managers:", eventManagers);
+          console.log("Found machine components:", machineComponents);
         } else {
           error = "Failed to load machine configuration";
         }
@@ -350,27 +384,47 @@
           {#if ['detection', 'classification', 'tracker'].includes(newRule.type)}
             <div class="form-group">
               <label for="camera">Camera:</label>
-              <input id="camera" type="text" bind:value={newRule.camera} placeholder="camera_name" />
+              <select id="camera" bind:value={newRule.camera}>
+                <option value="">Select a camera</option>
+                {#each cameras as cameraName}
+                  <option value={cameraName}>{cameraName}</option>
+                {/each}
+              </select>
             </div>
             
             {#if newRule.type === 'detection'}
               <div class="form-group">
                 <label for="detector">Detector:</label>
-                <input id="detector" type="text" bind:value={newRule.detector} placeholder="detector_name" />
+                <select id="detector" bind:value={newRule.detector}>
+                  <option value="">Select a vision service</option>
+                  {#each visionServices as serviceName}
+                    <option value={serviceName}>{serviceName}</option>
+                  {/each}
+                </select>
               </div>
             {/if}
             
             {#if newRule.type === 'classification'}
               <div class="form-group">
                 <label for="classifier">Classifier:</label>
-                <input id="classifier" type="text" bind:value={newRule.classifier} placeholder="classifier_name" />
+                 <select id="classifier" bind:value={newRule.classifier}>
+                  <option value="">Select a vision service</option>
+                  {#each visionServices as serviceName}
+                    <option value={serviceName}>{serviceName}</option>
+                  {/each}
+                </select>
               </div>
             {/if}
             
             {#if newRule.type === 'tracker'}
               <div class="form-group">
                 <label for="tracker">Tracker:</label>
-                <input id="tracker" type="text" bind:value={newRule.tracker} placeholder="tracker_name" />
+                <select id="tracker" bind:value={newRule.tracker}>
+                  <option value="">Select a vision service</option>
+                  {#each visionServices as serviceName}
+                    <option value={serviceName}>{serviceName}</option>
+                  {/each}
+                </select>
               </div>
             {/if}
             
@@ -395,12 +449,22 @@
           {#if newRule.type === 'call'}
             <div class="form-group">
               <label for="resource">Resource:</label>
-              <input id="resource" type="text" bind:value={newRule.resource} placeholder="resource_name" />
+              <select id="resource" bind:value={newRule.resource}>
+                <option value="">Select a resource</option>
+                {#each allResources as resourceName}
+                  <option value={resourceName}>{resourceName}</option>
+                {/each}
+              </select>
             </div>
             
             <div class="form-group">
               <label for="method">Method:</label>
-              <input id="method" type="text" bind:value={newRule.method} placeholder="method_name" />
+              <select id="method" bind:value={newRule.method} disabled={!newRule.resource}>
+                <option value="">Select a method</option>
+                {#each callRuleMethods as methodName}
+                  <option value={methodName}>{methodName}</option>
+                {/each}
+              </select>
             </div>
             
             <div class="form-group">
@@ -503,12 +567,22 @@
           <h3>Add New Action</h3>
           <div class="form-group">
             <label for="action_resource">Resource:</label>
-            <input id="action_resource" type="text" bind:value={newAction.resource} placeholder="resource_name" />
+            <select id="action_resource" bind:value={newAction.resource}>
+              <option value="">Select a resource</option>
+              {#each allResources as resourceName}
+                <option value={resourceName}>{resourceName}</option>
+              {/each}
+            </select>
           </div>
           
           <div class="form-group">
             <label for="action_method">Method:</label>
-            <input id="action_method" type="text" bind:value={newAction.method} placeholder="method_name" />
+            <select id="action_method" bind:value={newAction.method} disabled={!newAction.resource}>
+              <option value="">Select a method</option>
+              {#each actionMethods as methodName}
+                <option value={methodName}>{methodName}</option>
+              {/each}
+            </select>
           </div>
           
           <div class="form-group">
