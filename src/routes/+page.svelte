@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
+  import { replaceState, goto } from '$app/navigation';
   import { viamClient, getMachineConfig, findEventManagers, saveEventManager } from '../lib/index.js';
   import resourceMethods from '../lib/resource_methods.json' with { type: 'json' };
 
@@ -10,9 +11,17 @@
   $: editEventManagerName = $page.url.searchParams.get('edit');
 
   // Auto-open editing form if edit parameter is provided
-  $: if (editEventManagerName && eventManagers.length > 0 && !showEventManagerForm) {
+  $: if (editEventManagerName && eventManagers.length > 0 && !showEventManagerForm && !editingEventManager && !isClosingForm) {
+    console.log("Reactive statement triggered!");
+    console.log("editEventManagerName:", editEventManagerName);
+    console.log("eventManagers.length:", eventManagers.length);
+    console.log("showEventManagerForm:", showEventManagerForm);
+    console.log("editingEventManager:", editingEventManager);
+    console.log("isClosingForm:", isClosingForm);
+    
     const eventManagerToEdit = eventManagers.find(em => em.name === editEventManagerName);
     if (eventManagerToEdit) {
+      console.log("Opening form for event manager:", eventManagerToEdit.name);
       openEventManagerForm(eventManagerToEdit);
     }
   }
@@ -65,37 +74,46 @@
     when_secs: number;
   }
 
-  interface EventConfig {
+  interface Event {
     name: string;
+    modes?: string[];
     pause_alerting_on_event_secs: number;
-    backoff_schedule?: Record<string, number>;
     detection_hz: number;
     rule_logic_type: 'AND' | 'OR' | 'XOR' | 'NOR' | 'NAND' | 'XNOR';
     trigger_sequence_count: number;
-    require_rule_reset: boolean;
-    rule_reset_count: number;
+    require_rule_reset?: boolean;
+    rule_reset_count?: number;
     notifications: Notification[];
     actions: Action[];
     rules: Rule[];
-    resources?: Record<string, {type: string, subtype: string}>;
+    capture_video?: boolean;
+    video_capture_resource?: string;
+    event_video_capture_padding_secs?: number;
+  }
+
+  interface EventManager {
+    name: string;
     mode?: string;
     mode_override: {
       mode: string;
       until: string;
     };
+    back_state_to_disk?: boolean;
+    data_directory?: string;
+    app_api_key?: string;
+    app_api_key_id?: string;
+    email_module?: string;
+    sms_module?: string;
+    push_module?: string;
+    resources?: Record<string, {type: string, subtype: string}>;
+    events: Event[];
+    enable_backoff_schedule?: boolean;
+    backoff_schedule?: Record<string, number>;
   }
 
-  let config: EventConfig = {
+  let config: EventManager = {
     name: '',
-    pause_alerting_on_event_secs: 300,
-    detection_hz: 5,
-    rule_logic_type: 'AND',
-    trigger_sequence_count: 1,
-    require_rule_reset: false,
-    rule_reset_count: 1,
-    notifications: [],
-    actions: [],
-    rules: [],
+    events: [],
     mode_override: { mode: '', until: '' },
   };
 
@@ -115,6 +133,25 @@
   let saving = false;
   let saveError = '';
   let machineComponents: any[] = [];
+
+  // Backoff schedule text for JSON editing
+  let backoffScheduleText = '';
+
+  // Advanced settings visibility
+  let showAdvancedSettings = false;
+
+  // Event editing state
+  let editingEventIndex: number | null = null;
+  let editingEvent: Event | null = null;
+  let eventModesText = '';
+
+  // Event-specific form states
+  let showAddEventRule = false;
+  let showAddEventNotification = false;
+  let showAddEventAction = false;
+
+  // Flag to prevent reactive statement from re-opening form during close
+  let isClosingForm = false;
 
   // Reactive lists for dropdowns
   $: cameras = machineComponents.filter(c => c.api.startsWith('rdk:component:camera')).map(c => c.name);
@@ -151,50 +188,54 @@
     const autoResources: Record<string, {type: string, subtype: string}> = {};
     
     // Add resources from rules
-    config.rules.forEach(rule => {
-      if (rule.camera) {
-        const component = machineComponents.find(c => c.name === rule.camera);
-        if (component) {
-          autoResources[rule.camera] = {
-            type: 'component',
-            subtype: component.api.split(':')[2] || 'camera'
-          };
-        }
-      }
-      if (rule.detector || rule.classifier || rule.tracker) {
-        const serviceName = rule.detector || rule.classifier || rule.tracker;
-        if (serviceName) {
-          const service = machineComponents.find(c => c.name === serviceName);
-          if (service) {
-            autoResources[serviceName] = {
-              type: 'service',
-              subtype: service.api.split(':')[2] || 'vision'
+    config.events.forEach(event => {
+      event.rules.forEach(rule => {
+        if (rule.camera) {
+          const component = machineComponents.find(c => c.name === rule.camera);
+          if (component) {
+            autoResources[rule.camera] = {
+              type: 'component',
+              subtype: component.api.split(':')[2] || 'camera'
             };
           }
         }
-      }
-      if (rule.resource) {
-        const component = machineComponents.find(c => c.name === rule.resource);
-        if (component) {
-          autoResources[rule.resource] = {
-            type: 'component',
-            subtype: component.api.split(':')[2] || 'generic'
-          };
+        if (rule.detector || rule.classifier || rule.tracker) {
+          const serviceName = rule.detector || rule.classifier || rule.tracker;
+          if (serviceName) {
+            const service = machineComponents.find(c => c.name === serviceName);
+            if (service) {
+              autoResources[serviceName] = {
+                type: 'service',
+                subtype: service.api.split(':')[2] || 'vision'
+              };
+            }
+          }
         }
-      }
+        if (rule.resource) {
+          const component = machineComponents.find(c => c.name === rule.resource);
+          if (component) {
+            autoResources[rule.resource] = {
+              type: 'component',
+              subtype: component.api.split(':')[2] || 'generic'
+            };
+          }
+        }
+      });
     });
     
     // Add resources from actions
-    config.actions.forEach(action => {
-      if (action.resource) {
-        const component = machineComponents.find(c => c.name === action.resource);
-        if (component) {
-          autoResources[action.resource] = {
-            type: 'component',
-            subtype: component.api.split(':')[2] || 'generic'
-          };
+    config.events.forEach(event => {
+      event.actions.forEach(action => {
+        if (action.resource) {
+          const component = machineComponents.find(c => c.name === action.resource);
+          if (component) {
+            autoResources[action.resource] = {
+              type: 'component',
+              subtype: component.api.split(':')[2] || 'generic'
+            };
+          }
         }
-      }
+      });
     });
     
     config.resources = autoResources;
@@ -233,55 +274,127 @@
       editingEventManager = eventManager;
       config = {
         name: eventManager.name,
-        pause_alerting_on_event_secs: eventManager.config.pause_alerting_on_event_secs || 300,
-        detection_hz: eventManager.config.detection_hz || 5,
-        rule_logic_type: eventManager.config.rule_logic_type || 'AND',
-        trigger_sequence_count: eventManager.config.trigger_sequence_count || 1,
-        require_rule_reset: eventManager.config.require_rule_reset || false,
-        rule_reset_count: eventManager.config.rule_reset_count || 1,
-        notifications: eventManager.config.notifications || [],
-        actions: eventManager.config.actions || [],
-        rules: eventManager.config.rules || [],
-        backoff_schedule: eventManager.config.backoff_schedule,
-        resources: eventManager.config.resources || {},
         mode: eventManager.config.mode,
         mode_override: eventManager.config.mode_override || { mode: '', until: '' },
+        back_state_to_disk: eventManager.config.back_state_to_disk,
+        data_directory: eventManager.config.data_directory,
+        app_api_key: eventManager.config.app_api_key,
+        app_api_key_id: eventManager.config.app_api_key_id,
+        email_module: eventManager.config.email_module,
+        sms_module: eventManager.config.sms_module,
+        push_module: eventManager.config.push_module,
+        resources: eventManager.config.resources || {},
+        events: eventManager.config.events || [],
+        enable_backoff_schedule: eventManager.config.enable_backoff_schedule,
+        backoff_schedule: eventManager.config.backoff_schedule || {},
       };
     } else {
       // Create new config
       editingEventManager = null;
       config = {
         name: '',
-        pause_alerting_on_event_secs: 300,
-        detection_hz: 5,
-        rule_logic_type: 'AND',
-        trigger_sequence_count: 1,
-        require_rule_reset: false,
-        rule_reset_count: 1,
-        notifications: [],
-        actions: [],
-        rules: [],
-        backoff_schedule: {},
-        resources: {},
-        mode: '',
+        events: [],
         mode_override: { mode: '', until: '' },
+        enable_backoff_schedule: false,
+        backoff_schedule: {},
       };
     }
     showEventManagerForm = true;
     saveError = '';
+    // Initialize backoff schedule text
+    backoffScheduleText = JSON.stringify(config.backoff_schedule || {}, null, 2);
   }
 
-  function closeEventManagerForm() {
+  function addEvent() {
+    const newEvent: Event = {
+      name: `Event ${config.events.length + 1}`,
+      modes: ['active'],
+      pause_alerting_on_event_secs: 300,
+      detection_hz: 5,
+      rule_logic_type: 'AND',
+      trigger_sequence_count: 1,
+      require_rule_reset: false,
+      rule_reset_count: 1,
+      notifications: [],
+      actions: [],
+      rules: [],
+    };
+    config.events = [...config.events, newEvent];
+    
+    // Automatically open the edit form for the newly created event
+    const newEventIndex = config.events.length - 1;
+    editEvent(newEventIndex);
+  }
+
+  function removeEvent(index: number) {
+    config.events = config.events.filter((_, i) => i !== index);
+  }
+
+  function editEvent(eventIndex: number) {
+    editingEventIndex = eventIndex;
+    editingEvent = { ...config.events[eventIndex] };
+    eventModesText = editingEvent.modes?.join(', ') || '';
+  }
+
+  function saveEvent() {
+    if (editingEventIndex !== null && editingEvent) {
+      // Convert modes text back to array
+      editingEvent.modes = eventModesText.split(',').map(s => s.trim()).filter(Boolean);
+      config.events[editingEventIndex] = { ...editingEvent };
+      closeEventEdit();
+    }
+  }
+
+  function closeEventEdit() {
+    editingEventIndex = null;
+    editingEvent = null;
+  }
+
+  function removeEventRule(ruleIndex: number) {
+    if (editingEvent) {
+      editingEvent.rules = editingEvent.rules.filter((_, i) => i !== ruleIndex);
+    }
+  }
+
+  function removeEventNotification(notifIndex: number) {
+    if (editingEvent) {
+      editingEvent.notifications = editingEvent.notifications.filter((_, i) => i !== notifIndex);
+    }
+  }
+
+  function removeEventAction(actionIndex: number) {
+    if (editingEvent) {
+      editingEvent.actions = editingEvent.actions.filter((_, i) => i !== actionIndex);
+    }
+  }
+
+  async function closeEventManagerForm() {
+    console.log("Closing event manager form...");
+    
+    // Set flag to prevent reactive statement from re-opening
+    isClosingForm = true;
+    
+    // Force close the form immediately
     showEventManagerForm = false;
     editingEventManager = null;
+    editingEventIndex = null;
+    editingEvent = null;
+    showAddEventRule = false;
+    showAddEventNotification = false;
+    showAddEventAction = false;
     saveError = '';
     
-    // Clear the edit query parameter when closing the form
+    console.log("Form state cleared, showEventManagerForm:", showEventManagerForm);
+    
+    // Navigate to the same page without the edit parameter
     if (editEventManagerName) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete('edit');
-      window.history.replaceState({}, '', url.toString());
+      console.log("Navigating to clean URL...");
+      await goto($page.url.pathname, { replaceState: true });
+      console.log("Navigation complete");
     }
+    
+    // Reset the flag after navigation
+    isClosingForm = false;
   }
 
   async function saveEventManagerConfig() {
@@ -296,20 +409,12 @@
     try {
       // Prepare the event manager config (exclude the name field)
       const eventManagerConfig: any = {
-        pause_alerting_on_event_secs: config.pause_alerting_on_event_secs,
-        detection_hz: config.detection_hz,
-        rule_logic_type: config.rule_logic_type,
-        trigger_sequence_count: config.trigger_sequence_count,
-        require_rule_reset: config.require_rule_reset,
-        rule_reset_count: config.rule_reset_count,
-        notifications: config.notifications,
-        actions: config.actions,
-        rules: config.rules,
+        events: config.events,
       };
 
-      // Add backoff_schedule if it exists
-      if (config.backoff_schedule) {
-        eventManagerConfig.backoff_schedule = config.backoff_schedule;
+      // Add mode if it exists
+      if (config.mode) {
+        eventManagerConfig.mode = config.mode;
       }
 
       // Add resources if they exist
@@ -317,15 +422,40 @@
         eventManagerConfig.resources = config.resources;
       }
 
-      // Add mode and overrides if they exist
-      if (config.mode) {
-        eventManagerConfig.mode = config.mode;
+      // Add back_state_to_disk and data_directory if they exist
+      if (config.back_state_to_disk !== undefined) {
+        eventManagerConfig.back_state_to_disk = config.back_state_to_disk;
       }
-      if (config.mode_override.mode || config.mode_override.until) {
-        eventManagerConfig.mode_override = {
-          mode: config.mode_override.mode,
-          until: config.mode_override.until
-        };
+      if (config.data_directory) {
+        eventManagerConfig.data_directory = config.data_directory;
+      }
+
+      // Add app_api_key and app_api_key_id if they exist
+      if (config.app_api_key) {
+        eventManagerConfig.app_api_key = config.app_api_key;
+      }
+      if (config.app_api_key_id) {
+        eventManagerConfig.app_api_key_id = config.app_api_key_id;
+      }
+
+      // Add enable_backoff_schedule and backoff_schedule if they exist
+      if (config.enable_backoff_schedule !== undefined) {
+        eventManagerConfig.enable_backoff_schedule = config.enable_backoff_schedule;
+      }
+      if (config.backoff_schedule) {
+        eventManagerConfig.backoff_schedule = config.backoff_schedule;
+      }
+
+      // Convert backoff schedule text to JSON if enabled
+      if (config.enable_backoff_schedule && backoffScheduleText.trim()) {
+        try {
+          const parsedBackoff = JSON.parse(backoffScheduleText);
+          eventManagerConfig.backoff_schedule = parsedBackoff;
+        } catch (e) {
+          saveError = "Invalid JSON in backoff schedule";
+          saving = false;
+          return;
+        }
       }
 
       // If editing, use the original name to identify which event manager to update
@@ -357,7 +487,7 @@
   }
 
   function addRule() {
-    if (newRule.type) {
+    if (newRule.type && editingEvent) {
       // Create a clean rule object with only relevant fields for the rule type
       const ruleToAdd: any = {
         type: newRule.type
@@ -396,14 +526,14 @@
         if (newRule.inverse_pause_secs !== undefined) ruleToAdd.inverse_pause_secs = newRule.inverse_pause_secs;
       }
 
-      config.rules = [...config.rules, ruleToAdd];
+      editingEvent.rules = [...editingEvent.rules, ruleToAdd];
       newRule = { type: 'detection' };
-      showAddRule = false;
+      showAddEventRule = false;
     }
   }
 
   function addNotification() {
-    if (newNotification.type) {
+    if (newNotification.type && editingEvent) {
       const notificationToAdd: Notification = {
         type: newNotification.type,
         preset: newNotification.preset,
@@ -418,30 +548,36 @@
         notificationToAdd.fcm_tokens = newNotification.fcm_tokens.split(',').map(s => s.trim()).filter(Boolean);
       }
 
-      config.notifications = [...config.notifications, notificationToAdd];
+      editingEvent.notifications = [...editingEvent.notifications, notificationToAdd];
       newNotification = { type: 'sms' };
-      showAddNotification = false;
+      showAddEventNotification = false;
     }
   }
 
   function addAction() {
-    if (newAction.resource && newAction.method && newAction.payload !== undefined) {
-      config.actions = [...config.actions, { ...newAction }];
+    if (newAction.resource && newAction.method && newAction.payload !== undefined && editingEvent) {
+      editingEvent.actions = [...editingEvent.actions, { ...newAction }];
       newAction = { resource: '', method: '', payload: '', when_secs: 0 };
-      showAddAction = false;
+      showAddEventAction = false;
     }
   }
 
   function removeRule(index: number) {
-    config.rules = config.rules.filter((_, i) => i !== index);
+    config.events.forEach(event => {
+      event.rules = event.rules.filter((_, i) => i !== index);
+    });
   }
 
   function removeNotification(index: number) {
-    config.notifications = config.notifications.filter((_, i) => i !== index);
+    config.events.forEach(event => {
+      event.notifications = event.notifications.filter((_, i) => i !== index);
+    });
   }
 
   function removeAction(index: number) {
-    config.actions = config.actions.filter((_, i) => i !== index);
+    config.events.forEach(event => {
+      event.actions = event.actions.filter((_, i) => i !== index);
+    });
   }
 
   function getEditUrl(eventManagerName: string): string {
@@ -477,67 +613,10 @@
     <div class="form-section">
       <h2>Basic Settings</h2>
       <div class="form-group">
-        <label for="name">Event Name:</label>
-        <input id="name" type="text" bind:value={config.name} placeholder="Enter event name" />
+        <label for="name">Event Manager Name:</label>
+        <input id="name" type="text" bind:value={config.name} placeholder="Enter event manager name" />
       </div>
       
-      <div class="form-group">
-        <label for="pause_alerting">
-          Pause Alerting (seconds):
-          <span class="help-tooltip" title="How long to pause alerting after an event triggers before allowing new alerts for the same event">?</span>
-        </label>
-        <input id="pause_alerting" type="number" bind:value={config.pause_alerting_on_event_secs} min="0" />
-      </div>
-      
-      <div class="form-group">
-        <label for="detection_hz">
-          Detection Frequency (Hz):
-          <span class="help-tooltip" title="How often rules are evaluated per second. Higher values mean more frequent checking but more resource usage">?</span>
-        </label>
-        <input id="detection_hz" type="number" bind:value={config.detection_hz} min="1" max="60" />
-      </div>
-      
-      <div class="form-group">
-        <label for="rule_logic">
-          Rule Logic Type:
-          <span class="help-tooltip" title="Logic gate to use when combining multiple rules. AND: all rules must be true. OR: any rule can be true. XOR: exactly one rule must be true">?</span>
-        </label>
-        <select id="rule_logic" bind:value={config.rule_logic_type}>
-          <option value="AND">AND</option>
-          <option value="OR">OR</option>
-          <option value="XOR">XOR</option>
-          <option value="NOR">NOR</option>
-          <option value="NAND">NAND</option>
-          <option value="XNOR">XNOR</option>
-        </select>
-      </div>
-      
-      <div class="form-group">
-        <label for="trigger_sequence">
-          Trigger Sequence Count:
-          <span class="help-tooltip" title="How many times in a row an event must evaluate as true to be considered triggered. Helps reduce false positives">?</span>
-        </label>
-        <input id="trigger_sequence" type="number" bind:value={config.trigger_sequence_count} min="1" />
-      </div>
-      
-      <div class="form-group checkbox-group">
-        <label>
-          <input type="checkbox" bind:checked={config.require_rule_reset} />
-          Require Rule Reset
-          <span class="help-tooltip" title="When enabled, an event won't trigger again until rules evaluate to false, then true again. Useful for detecting state changes">?</span>
-        </label>
-      </div>
-      
-      {#if config.require_rule_reset}
-        <div class="form-group">
-          <label for="rule_reset_count">
-            Rule Reset Count:
-            <span class="help-tooltip" title="How many consecutive times rules must evaluate to false before the event can be re-triggered">?</span>
-          </label>
-          <input id="rule_reset_count" type="number" bind:value={config.rule_reset_count} min="1" />
-        </div>
-      {/if}
-
       <div class="form-group">
         <label for="mode">
           Mode:
@@ -545,390 +624,294 @@
         </label>
         <input id="mode" type="text" bind:value={config.mode} placeholder="e.g., active, inactive" />
       </div>
-
-      <div class="form-group">
-        <label for="mode_override">
-          Mode Override Mode:
-          <span class="help-tooltip" title="The mode to override with (e.g., inactive)">?</span>
-        </label>
-        <input id="mode_override" type="text" bind:value={config.mode_override.mode} placeholder="e.g., inactive" />
-      </div>
-
-      <div class="form-group">
-        <label for="mode_override_until">
-          Mode Override Until:
-          <span class="help-tooltip" title="ISO timestamp when the override should expire">?</span>
-        </label>
-        <input id="mode_override_until" type="datetime-local" bind:value={config.mode_override.until} />
-      </div>
     </div>
 
     <div class="form-section">
-      <h2>Rules</h2>
-      {#each config.rules as rule, index}
-        <div class="rule-item">
-          <h3>Rule {index + 1}: {rule.type}</h3>
-          {#if rule.camera}
-            <p>Camera: {rule.camera}</p>
-          {/if}
-          {#if rule.detector}
-            <p>Detector: {rule.detector}</p>
-          {/if}
-          {#if rule.classifier}
-            <p>Classifier: {rule.classifier}</p>
-          {/if}
-          {#if rule.tracker}
-            <p>Tracker: {rule.tracker}</p>
-          {/if}
-          {#if rule.resource}
-            <p>Resource: {rule.resource}</p>
-          {/if}
-          {#if rule.method}
-            <p>Method: {rule.method}</p>
-          {/if}
-          {#if rule.payload}
-            <p>Payload: {rule.payload}</p>
-          {/if}
-          {#if rule.result_path}
-            <p>Result Path: {rule.result_path}</p>
-          {/if}
-          {#if rule.result_function}
-            <p>Result Function: {rule.result_function}</p>
-          {/if}
-          {#if rule.result_operator}
-            <p>Result Operator: {rule.result_operator}</p>
-          {/if}
-          {#if rule.result_value}
-            <p>Result Value: {rule.result_value}</p>
-          {/if}
-          {#if rule.inverse_pause_secs}
-            <p>Inverse Pause: {rule.inverse_pause_secs} seconds</p>
-          {/if}
-          {#if rule.class_regex}
-            <p>Class Regex: {rule.class_regex}</p>
-          {/if}
-          {#if rule.confidence_pct}
-            <p>Confidence: {rule.confidence_pct * 100}%</p>
-          {/if}
-          <button class="remove-btn" on:click={() => removeRule(index)}>Remove</button>
-        </div>
-      {/each}
+      <div class="section-header" on:click={() => showAdvancedSettings = !showAdvancedSettings}>
+        <h2>Advanced Settings</h2>
+        <span class="toggle-icon">{showAdvancedSettings ? '▼' : '▶'}</span>
+      </div>
       
-      {#if showAddRule}
-        <div class="add-form">
-          <h3>Add New Rule</h3>
+      {#if showAdvancedSettings}
+        <div class="advanced-settings">
           <div class="form-group">
-            <label for="rule_type">Rule Type:</label>
-            <select id="rule_type" bind:value={newRule.type}>
-              <option value="detection">Detection</option>
-              <option value="classification">Classification</option>
-              <option value="tracker">Tracker</option>
-              <option value="time">Time</option>
-              <option value="call">Call</option>
-            </select>
+            <label for="app_api_key">
+              App API Key:
+              <span class="help-tooltip" title="Used to interface with Viam data management for triggered event management. Required if using do_command functionality.">?</span>
+            </label>
+            <input id="app_api_key" type="text" bind:value={config.app_api_key} placeholder="e.g., your_api_key" />
           </div>
-          
-          {#if ['detection', 'classification', 'tracker'].includes(newRule.type)}
-            <div class="form-group">
-              <label for="camera">Camera:</label>
-              <select id="camera" bind:value={newRule.camera}>
-                <option value="">Select a camera</option>
-                {#each cameras as cameraName}
-                  <option value={cameraName}>{cameraName}</option>
-                {/each}
-              </select>
-            </div>
-            
-            {#if newRule.type === 'detection'}
-              <div class="form-group">
-                <label for="detector">Detector:</label>
-                <select id="detector" bind:value={newRule.detector}>
-                  <option value="">Select a vision service</option>
-                  {#each visionServices as serviceName}
-                    <option value={serviceName}>{serviceName}</option>
-                  {/each}
-                </select>
-              </div>
-            {/if}
-            
-            {#if newRule.type === 'classification'}
-              <div class="form-group">
-                <label for="classifier">Classifier:</label>
-                 <select id="classifier" bind:value={newRule.classifier}>
-                  <option value="">Select a vision service</option>
-                  {#each visionServices as serviceName}
-                    <option value={serviceName}>{serviceName}</option>
-                  {/each}
-                </select>
-              </div>
-            {/if}
-            
-            {#if newRule.type === 'tracker'}
-              <div class="form-group">
-                <label for="tracker">Tracker:</label>
-                <select id="tracker" bind:value={newRule.tracker}>
-                  <option value="">Select a vision service</option>
-                  {#each visionServices as serviceName}
-                    <option value={serviceName}>{serviceName}</option>
-                  {/each}
-                </select>
-              </div>
-            {/if}
-            
-            <div class="form-group">
-              <label for="class_regex">Class Regex:</label>
-              <input id="class_regex" type="text" bind:value={newRule.class_regex} placeholder=".*" />
-            </div>
-            
-            <div class="form-group">
-              <label for="confidence_pct">Confidence %:</label>
-              <input id="confidence_pct" type="number" bind:value={newRule.confidence_pct} min="0" max="1" step="0.1" />
-            </div>
-          {/if}
-          
-          {#if newRule.type === 'time'}
-            <div class="form-group">
-              <label>Time Ranges (UTC):</label>
-              <p class="help-text">Add time ranges in 24-hour format</p>
-            </div>
-          {/if}
-          
-          {#if newRule.type === 'call'}
-            <div class="form-group">
-              <label for="resource">Resource:</label>
-              <select id="resource" bind:value={newRule.resource}>
-                <option value="">Select a resource</option>
-                {#each allResources as resourceName}
-                  <option value={resourceName}>{resourceName}</option>
-                {/each}
-              </select>
-            </div>
-            
-            <div class="form-group">
-              <label for="method">Method:</label>
-              <select id="method" bind:value={newRule.method} disabled={!newRule.resource}>
-                <option value="">Select a method</option>
-                {#each callRuleMethods as methodName}
-                  <option value={methodName}>{methodName}</option>
-                {/each}
-              </select>
-            </div>
-            
-            <div class="form-group">
-              <label for="payload">Payload (JSON):</label>
-              <input id="payload" type="text" bind:value={newRule.payload} placeholder="JSON object, e.g. 'key': 'value'" />
-            </div>
-            
-            <div class="form-group">
-              <label for="result_path">
-                Result Path (optional):
-                <span class="help-tooltip" title="JavaScript dot notation path to access a property in the result. Example: 'data.value' or 'items.0.name'">?</span>
-              </label>
-              <input id="result_path" type="text" bind:value={newRule.result_path} placeholder="e.g., data.value" />
-            </div>
-            
-            <div class="form-group">
-              <label for="result_function">
-                Result Function (optional):
-                <span class="help-tooltip" title="Function to apply to the result before comparison. 'len' for length, 'any' for checking if any item is truthy">?</span>
-              </label>
-              <select id="result_function" bind:value={newRule.result_function}>
-                <option value="">None</option>
-                <option value="len">len</option>
-                <option value="any">any</option>
-              </select>
-            </div>
-            
-            <div class="form-group">
-              <label for="result_operator">
-                Result Operator:
-                <span class="help-tooltip" title="Operator to use when comparing the result with the result value">?</span>
-              </label>
-              <select id="result_operator" bind:value={newRule.result_operator}>
-                <option value="">Select operator</option>
-                <option value="eq">Equal (eq)</option>
-                <option value="ne">Not Equal (ne)</option>
-                <option value="lt">Less Than (lt)</option>
-                <option value="lte">Less Than or Equal (lte)</option>
-                <option value="gt">Greater Than (gt)</option>
-                <option value="gte">Greater Than or Equal (gte)</option>
-                <option value="regex">Regex Match (regex)</option>
-                <option value="in">In (in)</option>
-                <option value="hasattr">Has Attribute (hasattr)</option>
-              </select>
-            </div>
-            
-            <div class="form-group">
-              <label for="result_value">
-                Result Value:
-                <span class="help-tooltip" title="Value to compare against using the selected operator">?</span>
-              </label>
-              <input id="result_value" type="text" bind:value={newRule.result_value} placeholder="Value to compare against" />
-            </div>
-            
-            <div class="form-group">
-              <label for="inverse_pause_secs">
-                Inverse Pause (seconds, optional):
-                <span class="help-tooltip" title="Duration to pause event evaluation when the result evaluates to false">?</span>
-              </label>
-              <input id="inverse_pause_secs" type="number" bind:value={newRule.inverse_pause_secs} min="0" placeholder="Pause duration when result is false" />
-            </div>
-          {/if}
-          
-          <div class="button-group">
-            <button class="btn btn-primary" on:click={addRule}>Add Rule</button>
-            <button class="btn btn-secondary" on:click={() => showAddRule = false}>Cancel</button>
-          </div>
-        </div>
-      {:else}
-        <button class="btn btn-primary" on:click={() => showAddRule = true}>Add Rule</button>
-      {/if}
-    </div>
 
-    <div class="form-section">
-      <h2>Notifications</h2>
-      {#each config.notifications as notification, index}
-        <div class="notification-item">
-          <h3>Notification {index + 1}: {notification.type}</h3>
-          {#if notification.to}
-            <p>To: {notification.to.join(', ')}</p>
-          {/if}
-          {#if notification.url}
-            <p>URL: {notification.url}</p>
-          {/if}
-          <button class="remove-btn" on:click={() => removeNotification(index)}>Remove</button>
-        </div>
-      {/each}
-      
-      {#if showAddNotification}
-        <div class="add-form">
-          <h3>Add New Notification</h3>
           <div class="form-group">
-            <label for="notification_type">Type:</label>
-            <select id="notification_type" bind:value={newNotification.type}>
-              <option value="sms">SMS</option>
-              <option value="email">Email</option>
-              <option value="webhook_get">Webhook GET</option>
-              <option value="push">Push</option>
-            </select>
+            <label for="app_api_key_id">
+              App API Key ID:
+              <span class="help-tooltip" title="Used to interface with Viam data management for triggered event management. Required if using do_command functionality.">?</span>
+            </label>
+            <input id="app_api_key_id" type="text" bind:value={config.app_api_key_id} placeholder="e.g., your_api_key_id" />
           </div>
-          
-          {#if newNotification.type === 'sms' || newNotification.type === 'email'}
-            <div class="form-group">
-              <label for="preset">
-                Preset:
-                <span class="help-tooltip" title="Name of the preset message template to use for this notification type">?</span>
-              </label>
-              <input id="preset" type="text" bind:value={newNotification.preset} placeholder="e.g., twilio_sms" />
-            </div>
 
-            <div class="form-group">
-              <label for="to">
-                To (comma-separated):
-                <span class="help-tooltip" title="Phone numbers for SMS or email addresses for email, separated by commas">?</span>
-              </label>
-              <input id="to" type="text" bind:value={newNotification.to} placeholder="phone@example.com, +1234567890" />
-            </div>
-          {/if}
-          
-          {#if newNotification.type === 'webhook_get'}
-            <div class="form-group">
-              <label for="url">URL:</label>
-              <input id="url" type="url" bind:value={newNotification.url} placeholder="https://example.com/webhook" />
-            </div>
-          {/if}
-          
-          {#if newNotification.type === 'push'}
-            <div class="form-group">
-              <label for="fcm_tokens">FCM Tokens (comma-separated):</label>
-              <input id="fcm_tokens" type="text" bind:value={newNotification.fcm_tokens} placeholder="token1, token2" />
-            </div>
-          {/if}
-          
-          <div class="form-group">
+          <div class="form-group checkbox-group">
             <label>
-              <input type="checkbox" bind:checked={newNotification.include_image} />
-              Include Image
+              <input type="checkbox" bind:checked={config.back_state_to_disk} />
+              Back State to Disk
+              <span class="help-tooltip" title="When enabled, the event manager's state (e.g., backoff schedules, trigger counts) will be persisted to disk. This is useful for long-running services.">?</span>
             </label>
           </div>
-          
-          <div class="button-group">
-            <button class="btn btn-primary" on:click={addNotification}>Add Notification</button>
-            <button class="btn btn-secondary" on:click={() => showAddNotification = false}>Cancel</button>
+
+          <div class="form-group">
+            <label for="data_directory">
+              Data Directory:
+              <span class="help-tooltip" title="The directory where the event manager's state will be stored. This is only relevant if back_state_to_disk is true.">?</span>
+            </label>
+            <input id="data_directory" type="text" bind:value={config.data_directory} placeholder="e.g., /data/viam/event_manager" />
           </div>
+
+          <div class="form-group">
+            <label for="mode_override">
+              Mode Override Mode:
+              <span class="help-tooltip" title="The mode to override with (e.g., inactive)">?</span>
+            </label>
+            <input id="mode_override" type="text" bind:value={config.mode_override.mode} placeholder="e.g., inactive" />
+          </div>
+
+          <div class="form-group">
+            <label for="mode_override_until">
+              Mode Override Until:
+              <span class="help-tooltip" title="ISO timestamp when the override should expire">?</span>
+            </label>
+            <input id="mode_override_until" type="datetime-local" bind:value={config.mode_override.until} />
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label>
+              <input type="checkbox" bind:checked={config.enable_backoff_schedule} />
+              Enable Backoff Schedule
+              <span class="help-tooltip" title="When enabled, the event manager will use a backoff schedule to reduce the frequency of triggered events.">?</span>
+            </label>
+          </div>
+
+          {#if config.enable_backoff_schedule}
+            <div class="form-group">
+              <label for="backoff_schedule">
+                Backoff Schedule (JSON):
+                <span class="help-tooltip" title="A JSON object defining the backoff schedule. Example: 300: 120 means after 5 minutes, pause for 2 minutes.">?</span>
+              </label>
+              <textarea id="backoff_schedule" bind:value={backoffScheduleText} placeholder="Enter JSON backoff schedule" rows="4"></textarea>
+            </div>
+          {/if}
         </div>
-      {:else}
-        <button class="btn btn-primary" on:click={() => showAddNotification = true}>Add Notification</button>
       {/if}
     </div>
 
     <div class="form-section">
-      <h2>Actions</h2>
-      {#each config.actions as action, index}
-        <div class="action-item">
-          <h3>Action {index + 1}</h3>
-          <p>Resource: {action.resource}</p>
-          <p>Method: {action.method}</p>
-          <p>Payload: {action.payload}</p>
-          {#if action.when_secs !== 0}
-            <p>Delay: {action.when_secs} seconds</p>
-          {/if}
-          <button class="remove-btn" on:click={() => removeAction(index)}>Remove</button>
-        </div>
-      {/each}
-      
-      {#if showAddAction}
-        <div class="add-form">
-          <h3>Add New Action</h3>
-          <div class="form-group">
-            <label for="action_resource">Resource:</label>
-            <select id="action_resource" bind:value={newAction.resource}>
-              <option value="">Select a resource</option>
-              {#each allResources as resourceName}
-                <option value={resourceName}>{resourceName}</option>
-              {/each}
-            </select>
+      <h2>Events</h2>
+      {#if config.events.length > 0}
+        {#each config.events as event, index}
+          <div class="event-item">
+            {#if editingEventIndex === index && editingEvent}
+              <!-- Event Editing Form -->
+              <div class="event-edit-form">
+                <div class="edit-header">
+                  <h3>Edit Event: {editingEvent.name}</h3>
+                  <div class="edit-actions">
+                    <button class="btn btn-success" on:click={saveEvent}>Save Event</button>
+                    <button class="btn btn-secondary" on:click={closeEventEdit}>Cancel</button>
+                  </div>
+                </div>
+                
+                <div class="edit-sections">
+                  <!-- Basic Settings -->
+                  <div class="edit-section">
+                    <h4>Basic Settings</h4>
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label for="event_name">Event Name:</label>
+                        <input id="event_name" type="text" bind:value={editingEvent.name} />
+                      </div>
+                      <div class="form-group">
+                        <label for="event_pause">Pause Alerting (seconds):</label>
+                        <input id="event_pause" type="number" bind:value={editingEvent.pause_alerting_on_event_secs} min="0" />
+                      </div>
+                    </div>
+                    
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label for="event_detection_hz">Detection Frequency (Hz):</label>
+                        <input id="event_detection_hz" type="number" bind:value={editingEvent.detection_hz} min="1" max="60" />
+                      </div>
+                      <div class="form-group">
+                        <label for="event_trigger_count">Trigger Sequence Count:</label>
+                        <input id="event_trigger_count" type="number" bind:value={editingEvent.trigger_sequence_count} min="1" />
+                      </div>
+                    </div>
+                    
+                    <div class="form-row">
+                      <div class="form-group">
+                        <label for="event_logic_type">Rule Logic Type:</label>
+                        <select id="event_logic_type" bind:value={editingEvent.rule_logic_type}>
+                          <option value="AND">AND</option>
+                          <option value="OR">OR</option>
+                          <option value="XOR">XOR</option>
+                          <option value="NOR">NOR</option>
+                          <option value="NAND">NAND</option>
+                          <option value="XNOR">XNOR</option>
+                        </select>
+                      </div>
+                      <div class="form-group">
+                        <label for="event_modes">Modes (comma-separated):</label>
+                        <input id="event_modes" type="text" bind:value={eventModesText} placeholder="active, inactive" />
+                      </div>
+                    </div>
+                    
+                    <div class="form-row">
+                      <div class="form-group checkbox-group">
+                        <label>
+                          <input type="checkbox" bind:checked={editingEvent.require_rule_reset} />
+                          Require Rule Reset
+                        </label>
+                      </div>
+                      {#if editingEvent.require_rule_reset}
+                        <div class="form-group">
+                          <label for="event_reset_count">Rule Reset Count:</label>
+                          <input id="event_reset_count" type="number" bind:value={editingEvent.rule_reset_count} min="1" />
+                        </div>
+                      {/if}
+                    </div>
+                    
+                    <div class="form-row">
+                      <div class="form-group checkbox-group">
+                        <label>
+                          <input type="checkbox" bind:checked={editingEvent.capture_video} />
+                          Capture Video
+                        </label>
+                      </div>
+                      {#if editingEvent.capture_video}
+                        <div class="form-group">
+                          <label for="event_video_resource">Video Capture Resource:</label>
+                          <input id="event_video_resource" type="text" bind:value={editingEvent.video_capture_resource} placeholder="camera_name" />
+                        </div>
+                        <div class="form-group">
+                          <label for="event_video_padding">Video Capture Padding (seconds):</label>
+                          <input id="event_video_padding" type="number" bind:value={editingEvent.event_video_capture_padding_secs} min="0" />
+                        </div>
+                      {/if}
+                    </div>
+                  </div>
+
+                  <!-- Rules Section -->
+                  <div class="edit-section">
+                    <div class="section-header">
+                      <h4>Rules ({editingEvent.rules.length})</h4>
+                      <button class="btn btn-primary btn-sm" on:click={() => showAddEventRule = true}>Add Rule</button>
+                    </div>
+                    
+                    {#if editingEvent.rules.length > 0}
+                      <div class="items-list">
+                        {#each editingEvent.rules as rule, ruleIndex}
+                          <div class="item-card">
+                            <div class="item-header">
+                              <h5>Rule {ruleIndex + 1}: {rule.type}</h5>
+                              <button class="remove-btn" on:click={() => removeEventRule(ruleIndex)}>Remove</button>
+                            </div>
+                            <div class="item-details">
+                              {#if rule.camera}<p>Camera: {rule.camera}</p>{/if}
+                              {#if rule.detector}<p>Detector: {rule.detector}</p>{/if}
+                              {#if rule.classifier}<p>Classifier: {rule.classifier}</p>{/if}
+                              {#if rule.tracker}<p>Tracker: {rule.tracker}</p>{/if}
+                              {#if rule.resource}<p>Resource: {rule.resource}</p>{/if}
+                              {#if rule.method}<p>Method: {rule.method}</p>{/if}
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                    {:else}
+                      <p class="empty-message">No rules configured. Add a rule to get started.</p>
+                    {/if}
+                  </div>
+
+                  <!-- Notifications Section -->
+                  <div class="edit-section">
+                    <div class="section-header">
+                      <h4>Notifications ({editingEvent.notifications.length})</h4>
+                      <button class="btn btn-primary btn-sm" on:click={() => showAddEventNotification = true}>Add Notification</button>
+                    </div>
+                    
+                    {#if editingEvent.notifications.length > 0}
+                      <div class="items-list">
+                        {#each editingEvent.notifications as notification, notifIndex}
+                          <div class="item-card">
+                            <div class="item-header">
+                              <h5>Notification {notifIndex + 1}: {notification.type}</h5>
+                              <button class="remove-btn" on:click={() => removeEventNotification(notifIndex)}>Remove</button>
+                            </div>
+                            <div class="item-details">
+                              {#if notification.to}<p>To: {notification.to.join(', ')}</p>{/if}
+                              {#if notification.url}<p>URL: {notification.url}</p>{/if}
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                    {:else}
+                      <p class="empty-message">No notifications configured. Add a notification to get started.</p>
+                    {/if}
+                  </div>
+
+                  <!-- Actions Section -->
+                  <div class="edit-section">
+                    <div class="section-header">
+                      <h4>Actions ({editingEvent.actions.length})</h4>
+                      <button class="btn btn-primary btn-sm" on:click={() => showAddEventAction = true}>Add Action</button>
+                    </div>
+                    
+                    {#if editingEvent.actions.length > 0}
+                      <div class="items-list">
+                        {#each editingEvent.actions as action, actionIndex}
+                          <div class="item-card">
+                            <div class="item-header">
+                              <h5>Action {actionIndex + 1}</h5>
+                              <button class="remove-btn" on:click={() => removeEventAction(actionIndex)}>Remove</button>
+                            </div>
+                            <div class="item-details">
+                              <p>Resource: {action.resource}</p>
+                              <p>Method: {action.method}</p>
+                              <p>Payload: {action.payload}</p>
+                              {#if action.when_secs !== 0}<p>Delay: {action.when_secs} seconds</p>{/if}
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                    {:else}
+                      <p class="empty-message">No actions configured. Add an action to get started.</p>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+            {:else}
+              <!-- Event Display -->
+              <div class="event-preview">
+                <h3>Event {index + 1}: {event.name}</h3>
+                <div class="event-counts">
+                  <span class="count-item">Rules: {event.rules?.length || 0}</span>
+                  <span class="count-item">Notifications: {event.notifications?.length || 0}</span>
+                  <span class="count-item">Actions: {event.actions?.length || 0}</span>
+                </div>
+                <div class="event-actions">
+                  <button class="btn btn-primary" on:click={() => editEvent(index)}>Edit Event</button>
+                  <button class="btn btn-danger" on:click={() => removeEvent(index)}>Remove Event</button>
+                </div>
+              </div>
+            {/if}
           </div>
-          
-          <div class="form-group">
-            <label for="action_method">Method:</label>
-            <select id="action_method" bind:value={newAction.method} disabled={!newAction.resource}>
-              <option value="">Select a method</option>
-              {#each actionMethods as methodName}
-                <option value={methodName}>{methodName}</option>
-              {/each}
-            </select>
-          </div>
-          
-          <div class="form-group">
-            <label for="action_payload">Payload (JSON):</label>
-            <input id="action_payload" type="text" bind:value={newAction.payload} placeholder="JSON object, e.g. 'key': 'value'" />
-          </div>
-          
-          <div class="form-group">
-            <label for="when_secs">
-              Delay (seconds):
-              <span class="help-tooltip" title="How many seconds after the event triggers should this action occur. Use -1 to disable automatic execution">?</span>
-            </label>
-            <input id="when_secs" type="number" bind:value={newAction.when_secs} min="-1" />
-          </div>
-          
-          <div class="form-group">
-            <label for="response_match">
-              Response Match (regex):
-              <span class="help-tooltip" title="If a response matches this regex pattern, this action will be triggered. Leave empty for no response matching">?</span>
-            </label>
-            <input id="response_match" type="text" bind:value={newAction.response_match} placeholder="optional" />
-          </div>
-          
-          <div class="button-group">
-            <button class="btn btn-primary" on:click={addAction}>Add Action</button>
-            <button class="btn btn-secondary" on:click={() => showAddAction = false}>Cancel</button>
-          </div>
-        </div>
+        {/each}
       {:else}
-        <button class="btn btn-primary" on:click={() => showAddAction = true}>Add Action</button>
+        <div class="empty-events">
+          <p>No events configured yet. Add your first event to get started.</p>
+        </div>
       {/if}
+      
+      <div class="add-event-button">
+        <button class="btn btn-primary" on:click={() => addEvent()}>Add New Event</button>
+      </div>
     </div>
 
     <div class="form-section">
@@ -945,7 +928,7 @@
           {/each}
         </div>
       {:else}
-        <p class="empty-resources">No resources referenced yet. Add rules or actions to see resources here.</p>
+        <p class="empty-resources">No resources referenced yet. Add events or rules to see resources here.</p>
       {/if}
     </div>
 
@@ -976,9 +959,7 @@
           <div class="event-manager-item">
             <div class="event-manager-info">
               <h3>{eventManager.name}</h3>
-              <p>Rules: {eventManager.config.rules?.length || 0}</p>
-              <p>Notifications: {eventManager.config.notifications?.length || 0}</p>
-              <p>Actions: {eventManager.config.actions?.length || 0}</p>
+              <p>Events: {eventManager.config?.events?.length || 0}</p>
             </div>
             <div class="event-manager-actions">
               <a href={getEditUrl(eventManager.name)} class="btn btn-primary">Edit</a>
@@ -987,6 +968,217 @@
         {/each}
       </div>
     {/if}
+  </div>
+{/if} 
+
+<!-- Add Forms -->
+{#if showAddEventRule}
+  <div class="add-form-overlay">
+    <div class="add-form">
+      <h5>Add New Rule</h5>
+      <div class="form-group">
+        <label for="rule_type">Rule Type:</label>
+        <select id="rule_type" bind:value={newRule.type}>
+          <option value="detection">Detection</option>
+          <option value="classification">Classification</option>
+          <option value="tracker">Tracker</option>
+          <option value="time">Time</option>
+          <option value="call">Call</option>
+        </select>
+      </div>
+      
+      {#if ['detection', 'classification', 'tracker'].includes(newRule.type)}
+        <div class="form-group">
+          <label for="camera">Camera:</label>
+          <select id="camera" bind:value={newRule.camera}>
+            <option value="">Select a camera</option>
+            {#each cameras as cameraName}
+              <option value={cameraName}>{cameraName}</option>
+            {/each}
+          </select>
+        </div>
+        
+        {#if newRule.type === 'detection'}
+          <div class="form-group">
+            <label for="detector">Detector:</label>
+            <select id="detector" bind:value={newRule.detector}>
+              <option value="">Select a vision service</option>
+              {#each visionServices as serviceName}
+                <option value={serviceName}>{serviceName}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+        
+        {#if newRule.type === 'classification'}
+          <div class="form-group">
+            <label for="classifier">Classifier:</label>
+             <select id="classifier" bind:value={newRule.classifier}>
+              <option value="">Select a vision service</option>
+              {#each visionServices as serviceName}
+                <option value={serviceName}>{serviceName}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+        
+        {#if newRule.type === 'tracker'}
+          <div class="form-group">
+            <label for="tracker">Tracker:</label>
+            <select id="tracker" bind:value={newRule.tracker}>
+              <option value="">Select a vision service</option>
+              {#each visionServices as serviceName}
+                <option value={serviceName}>{serviceName}</option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+        
+        <div class="form-group">
+          <label for="class_regex">Class Regex:</label>
+          <input id="class_regex" type="text" bind:value={newRule.class_regex} placeholder=".*" />
+        </div>
+        
+        <div class="form-group">
+          <label for="confidence_pct">Confidence %:</label>
+          <input id="confidence_pct" type="number" bind:value={newRule.confidence_pct} min="0" max="1" step="0.1" />
+        </div>
+      {/if}
+      
+      {#if newRule.type === 'call'}
+        <div class="form-group">
+          <label for="resource">Resource:</label>
+          <select id="resource" bind:value={newRule.resource}>
+            <option value="">Select a resource</option>
+            {#each allResources as resourceName}
+              <option value={resourceName}>{resourceName}</option>
+            {/each}
+          </select>
+        </div>
+        
+        <div class="form-group">
+          <label for="method">Method:</label>
+          <select id="method" bind:value={newRule.method} disabled={!newRule.resource}>
+            <option value="">Select a method</option>
+            {#each callRuleMethods as methodName}
+              <option value={methodName}>{methodName}</option>
+            {/each}
+          </select>
+        </div>
+        
+        <div class="form-group">
+          <label for="payload">Payload (JSON):</label>
+          <input id="payload" type="text" bind:value={newRule.payload} placeholder="JSON object, e.g. 'key': 'value'" />
+        </div>
+      {/if}
+      
+      <div class="button-group">
+        <button class="btn btn-primary" on:click={addRule}>Add Rule</button>
+        <button class="btn btn-secondary" on:click={() => showAddEventRule = false}>Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showAddEventNotification}
+  <div class="add-form-overlay">
+    <div class="add-form">
+      <h5>Add New Notification</h5>
+      <div class="form-group">
+        <label for="notification_type">Type:</label>
+        <select id="notification_type" bind:value={newNotification.type}>
+          <option value="sms">SMS</option>
+          <option value="email">Email</option>
+          <option value="webhook_get">Webhook GET</option>
+          <option value="push">Push</option>
+        </select>
+      </div>
+      
+      {#if newNotification.type === 'sms' || newNotification.type === 'email'}
+        <div class="form-group">
+          <label for="preset">Preset:</label>
+          <input id="preset" type="text" bind:value={newNotification.preset} placeholder="e.g., twilio_sms" />
+        </div>
+
+        <div class="form-group">
+          <label for="to">To (comma-separated):</label>
+          <input id="to" type="text" bind:value={newNotification.to} placeholder="phone@example.com, +1234567890" />
+        </div>
+      {/if}
+      
+      {#if newNotification.type === 'webhook_get'}
+        <div class="form-group">
+          <label for="url">URL:</label>
+          <input id="url" type="url" bind:value={newNotification.url} placeholder="https://example.com/webhook" />
+        </div>
+      {/if}
+      
+      {#if newNotification.type === 'push'}
+        <div class="form-group">
+          <label for="fcm_tokens">FCM Tokens (comma-separated):</label>
+          <input id="fcm_tokens" type="text" bind:value={newNotification.fcm_tokens} placeholder="token1, token2" />
+        </div>
+      {/if}
+      
+      <div class="form-group">
+        <label>
+          <input type="checkbox" bind:checked={newNotification.include_image} />
+          Include Image
+        </label>
+      </div>
+      
+      <div class="button-group">
+        <button class="btn btn-primary" on:click={addNotification}>Add Notification</button>
+        <button class="btn btn-secondary" on:click={() => showAddEventNotification = false}>Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showAddEventAction}
+  <div class="add-form-overlay">
+    <div class="add-form">
+      <h5>Add New Action</h5>
+      <div class="form-group">
+        <label for="action_resource">Resource:</label>
+        <select id="action_resource" bind:value={newAction.resource}>
+          <option value="">Select a resource</option>
+          {#each allResources as resourceName}
+            <option value={resourceName}>{resourceName}</option>
+          {/each}
+        </select>
+      </div>
+      
+      <div class="form-group">
+        <label for="action_method">Method:</label>
+        <select id="action_method" bind:value={newAction.method} disabled={!newAction.resource}>
+          <option value="">Select a method</option>
+          {#each actionMethods as methodName}
+            <option value={methodName}>{methodName}</option>
+          {/each}
+        </select>
+      </div>
+      
+      <div class="form-group">
+        <label for="action_payload">Payload (JSON):</label>
+        <input id="action_payload" type="text" bind:value={newAction.payload} placeholder="JSON object, e.g. 'key': 'value'" />
+      </div>
+      
+      <div class="form-group">
+        <label for="when_secs">Delay (seconds):</label>
+        <input id="when_secs" type="number" bind:value={newAction.when_secs} min="-1" />
+      </div>
+      
+      <div class="form-group">
+        <label for="response_match">Response Match (regex):</label>
+        <input id="response_match" type="text" bind:value={newAction.response_match} placeholder="optional" />
+      </div>
+      
+      <div class="button-group">
+        <button class="btn btn-primary" on:click={addAction}>Add Action</button>
+        <button class="btn btn-secondary" on:click={() => showAddEventAction = false}>Cancel</button>
+      </div>
+    </div>
   </div>
 {/if}
 
@@ -1171,6 +1363,15 @@
     background: #1e7e34;
   }
 
+  .btn-danger {
+    background: #dc3545;
+    color: white;
+  }
+
+  .btn-danger:hover:not(:disabled) {
+    background: #c82333;
+  }
+
   .remove-btn {
     background: #dc3545;
     color: white;
@@ -1242,6 +1443,9 @@
     vertical-align: middle;
     transition: background-color 0.2s ease;
     user-select: none;
+    /* Try to reduce tooltip delay */
+    -webkit-tooltip-delay: 0s;
+    tooltip-delay: 0s;
   }
 
   .help-tooltip:hover {
@@ -1258,87 +1462,10 @@
     font-weight: bold;
   }
 
-  .tooltip-popup {
-    position: absolute;
-    background: #333;
-    color: white;
-    padding: 8px 12px;
-    border-radius: 4px;
-    font-size: 12px;
-    max-width: 250px;
-    z-index: 1000;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    white-space: normal;
-    line-height: 1.4;
-    top: 25px;
-    left: 0;
-    min-width: 200px;
-  }
-
-  .tooltip-popup::before {
-    content: '';
-    position: absolute;
-    top: -4px;
-    left: 10px;
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-bottom: 4px solid #333;
-  }
-
-  /* Fix form overflow */
-  .form-group input,
-  .form-group select {
-    width: 100%;
-    padding: 8px 12px;
-    border: 1px solid #ced4da;
-    border-radius: 4px;
-    font-size: 14px;
-    box-sizing: border-box;
-  }
-
-  .form-group input:focus,
-  .form-group select:focus {
-    outline: none;
-    border-color: #007bff;
-    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
-  }
-
   /* Make tooltips appear instantly */
   [title] {
     transition-delay: 0s !important;
     --tooltip-delay: 0s;
-  }
-
-  /* Override browser tooltip delay */
-  *[title]:hover::after {
-    transition-delay: 0s !important;
-    animation-delay: 0s !important;
-  }
-
-  /* Try to reduce tooltip delay */
-  .help-tooltip {
-    margin-left: 5px;
-    color: #007bff;
-    cursor: help;
-    text-decoration: none;
-    position: relative;
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    line-height: 14px;
-    border-radius: 50%;
-    background-color: #007bff;
-    color: white;
-    font-size: 10px;
-    text-align: center;
-    vertical-align: middle;
-    transition: background-color 0.2s ease;
-    user-select: none;
-    /* Try to reduce tooltip delay */
-    -webkit-tooltip-delay: 0s;
-    tooltip-delay: 0s;
   }
 
   /* New styles for resource display */
@@ -1377,4 +1504,304 @@
     font-size: 12px;
     color: #6c757d;
   }
-</style>
+
+  /* Collapsible section styles */
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #e9ecef;
+    margin-bottom: 15px;
+    transition: background-color 0.2s ease;
+  }
+
+  .section-header:hover {
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    padding: 10px;
+    margin: -10px -10px 5px -10px;
+  }
+
+  .section-header h2 {
+    margin-bottom: 0;
+    color: #495057;
+    font-size: 18px;
+  }
+
+  .toggle-icon {
+    font-size: 16px;
+    color: #6c757d;
+    transition: transform 0.3s ease;
+    user-select: none;
+  }
+
+  .advanced-settings {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    padding: 15px;
+    margin-top: 15px;
+  }
+
+  .advanced-settings .form-group {
+    margin-bottom: 10px;
+  }
+
+  .event-item {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 15px;
+    margin-bottom: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .event-item h3 {
+    margin-top: 0;
+    color: #495057;
+    font-size: 16px;
+  }
+
+  .event-details {
+    flex-grow: 1;
+    margin-right: 20px;
+  }
+
+  .event-details p {
+    margin: 5px 0;
+    color: #6c757d;
+    font-size: 14px;
+  }
+
+  .event-actions {
+    display: flex;
+    gap: 10px;
+  }
+
+  .add-event-button {
+    margin-top: 15px;
+  }
+
+  .event-edit-form {
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 15px;
+    margin-top: 15px;
+  }
+
+  .event-edit-form h3 {
+    margin-top: 0;
+    color: #495057;
+    font-size: 16px;
+    margin-bottom: 15px;
+  }
+
+  .event-edit-form .form-group {
+    margin-bottom: 10px;
+  }
+
+  .event-edit-form .button-group {
+    margin-top: 20px;
+  }
+
+  .event-section {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid #e9ecef;
+  }
+
+  .event-section h4 {
+    color: #495057;
+    margin-bottom: 15px;
+    font-size: 16px;
+  }
+
+  .event-section h5 {
+    color: #6c757d;
+    margin-bottom: 10px;
+    font-size: 14px;
+  }
+
+  /* New styles for event edit form layout */
+  .edit-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+  }
+
+  .edit-header h3 {
+    margin: 0;
+    color: #495057;
+    font-size: 18px;
+  }
+
+  .edit-actions {
+    display: flex;
+    gap: 10px;
+  }
+
+  .edit-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .edit-section {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    padding: 15px;
+  }
+
+  .edit-section h4 {
+    margin-top: 0;
+    color: #495057;
+    font-size: 16px;
+    margin-bottom: 10px;
+  }
+
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #e9ecef;
+    margin-bottom: 10px;
+  }
+
+  .section-header h4 {
+    margin: 0;
+    color: #495057;
+    font-size: 16px;
+  }
+
+  .items-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .item-card {
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 15px;
+  }
+
+  .item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  .item-header h5 {
+    margin: 0;
+    color: #495057;
+    font-size: 14px;
+  }
+
+  .item-details p {
+    margin: 5px 0;
+    color: #6c757d;
+    font-size: 13px;
+  }
+
+  .empty-message {
+    color: #6c757d;
+    font-style: italic;
+    padding: 10px;
+  }
+
+  .form-row {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 10px;
+  }
+
+  .form-row .form-group {
+    flex: 1;
+  }
+
+  .add-form-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+  }
+
+  .add-form-overlay .add-form {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    max-width: 500px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+
+  .btn-sm {
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+
+  .empty-events {
+    text-align: center;
+    padding: 40px 20px;
+    background: #f8f9fa;
+    border: 2px dashed #dee2e6;
+    border-radius: 8px;
+    margin: 20px 0;
+  }
+
+  .empty-events p {
+    color: #6c757d;
+    font-size: 16px;
+    margin: 0;
+  }
+
+  /* New styles for event preview */
+  .event-preview {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 15px;
+    margin-bottom: 15px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .event-preview h3 {
+    margin-top: 0;
+    color: #495057;
+    font-size: 16px;
+    margin-bottom: 10px;
+  }
+
+  .event-counts {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 10px;
+    font-size: 14px;
+    color: #6c757d;
+  }
+
+  .count-item {
+    font-weight: 500;
+    color: #343a40;
+  }
+</style> 
