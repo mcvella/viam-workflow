@@ -35,6 +35,16 @@
     fcm_tokens?: string[];
   }
 
+  // Separate interface for the 'add notification' form to handle string inputs
+  interface NewNotification {
+    type: 'sms' | 'email' | 'webhook_get' | 'push';
+    preset?: string;
+    to?: string;
+    include_image?: boolean;
+    url?: string;
+    fcm_tokens?: string;
+  }
+
   interface Action {
     resource: string;
     method: string;
@@ -55,6 +65,7 @@
     notifications: Notification[];
     actions: Action[];
     rules: Rule[];
+    resources?: Record<string, {type: string, subtype: string}>;
   }
 
   let config: EventConfig = {
@@ -67,14 +78,14 @@
     rule_reset_count: 1,
     notifications: [],
     actions: [],
-    rules: []
+    rules: [],
   };
 
   let showAddRule = false;
   let showAddNotification = false;
   let showAddAction = false;
   let newRule: Rule = { type: 'detection' };
-  let newNotification: Notification = { type: 'sms' };
+  let newNotification: NewNotification = { type: 'sms' };
   let newAction: Action = { resource: '', method: '', payload: '', when_secs: 0 };
 
   // New state for event manager management
@@ -115,6 +126,60 @@
     if (actionApi) {
       console.log(`Action Resource: ${newAction.resource}, API: ${actionApi}, Methods:`, actionMethods);
     }
+  }
+
+  // Auto-manage resources based on rules and actions
+  $: {
+    const autoResources: Record<string, {type: string, subtype: string}> = {};
+    
+    // Add resources from rules
+    config.rules.forEach(rule => {
+      if (rule.camera) {
+        const component = machineComponents.find(c => c.name === rule.camera);
+        if (component) {
+          autoResources[rule.camera] = {
+            type: 'component',
+            subtype: component.api.split(':')[2] || 'camera'
+          };
+        }
+      }
+      if (rule.detector || rule.classifier || rule.tracker) {
+        const serviceName = rule.detector || rule.classifier || rule.tracker;
+        if (serviceName) {
+          const service = machineComponents.find(c => c.name === serviceName);
+          if (service) {
+            autoResources[serviceName] = {
+              type: 'service',
+              subtype: service.api.split(':')[2] || 'vision'
+            };
+          }
+        }
+      }
+      if (rule.resource) {
+        const component = machineComponents.find(c => c.name === rule.resource);
+        if (component) {
+          autoResources[rule.resource] = {
+            type: 'component',
+            subtype: component.api.split(':')[2] || 'generic'
+          };
+        }
+      }
+    });
+    
+    // Add resources from actions
+    config.actions.forEach(action => {
+      if (action.resource) {
+        const component = machineComponents.find(c => c.name === action.resource);
+        if (component) {
+          autoResources[action.resource] = {
+            type: 'component',
+            subtype: component.api.split(':')[2] || 'generic'
+          };
+        }
+      }
+    });
+    
+    config.resources = autoResources;
   }
 
   onMount(async () => {
@@ -158,7 +223,9 @@
         rule_reset_count: eventManager.config.rule_reset_count || 1,
         notifications: eventManager.config.notifications || [],
         actions: eventManager.config.actions || [],
-        rules: eventManager.config.rules || []
+        rules: eventManager.config.rules || [],
+        backoff_schedule: eventManager.config.backoff_schedule,
+        resources: eventManager.config.resources || {},
       };
     } else {
       // Create new config
@@ -173,7 +240,9 @@
         rule_reset_count: 1,
         notifications: [],
         actions: [],
-        rules: []
+        rules: [],
+        backoff_schedule: {},
+        resources: {},
       };
     }
     showEventManagerForm = true;
@@ -206,12 +275,17 @@
         rule_reset_count: config.rule_reset_count,
         notifications: config.notifications,
         actions: config.actions,
-        rules: config.rules
+        rules: config.rules,
       };
 
       // Add backoff_schedule if it exists
       if (config.backoff_schedule) {
         eventManagerConfig.backoff_schedule = config.backoff_schedule;
+      }
+
+      // Add resources if they exist
+      if (config.resources) {
+        eventManagerConfig.resources = config.resources;
       }
 
       // If editing, use the original name to identify which event manager to update
@@ -252,7 +326,21 @@
 
   function addNotification() {
     if (newNotification.type) {
-      config.notifications = [...config.notifications, { ...newNotification }];
+      const notificationToAdd: Notification = {
+        type: newNotification.type,
+        preset: newNotification.preset,
+        include_image: newNotification.include_image,
+        url: newNotification.url,
+      };
+
+      if (newNotification.to) {
+        notificationToAdd.to = newNotification.to.split(',').map(s => s.trim()).filter(Boolean);
+      }
+      if (newNotification.fcm_tokens) {
+        notificationToAdd.fcm_tokens = newNotification.fcm_tokens.split(',').map(s => s.trim()).filter(Boolean);
+      }
+
+      config.notifications = [...config.notifications, notificationToAdd];
       newNotification = { type: 'sms' };
       showAddNotification = false;
     }
@@ -310,17 +398,26 @@
       </div>
       
       <div class="form-group">
-        <label for="pause_alerting">Pause Alerting (seconds):</label>
+        <label for="pause_alerting">
+          Pause Alerting (seconds):
+          <span class="help-tooltip" title="How long to pause alerting after an event triggers before allowing new alerts for the same event">?</span>
+        </label>
         <input id="pause_alerting" type="number" bind:value={config.pause_alerting_on_event_secs} min="0" />
       </div>
       
       <div class="form-group">
-        <label for="detection_hz">Detection Frequency (Hz):</label>
+        <label for="detection_hz">
+          Detection Frequency (Hz):
+          <span class="help-tooltip" title="How often rules are evaluated per second. Higher values mean more frequent checking but more resource usage">?</span>
+        </label>
         <input id="detection_hz" type="number" bind:value={config.detection_hz} min="1" max="60" />
       </div>
       
       <div class="form-group">
-        <label for="rule_logic">Rule Logic Type:</label>
+        <label for="rule_logic">
+          Rule Logic Type:
+          <span class="help-tooltip" title="Logic gate to use when combining multiple rules. AND: all rules must be true. OR: any rule can be true. XOR: exactly one rule must be true">?</span>
+        </label>
         <select id="rule_logic" bind:value={config.rule_logic_type}>
           <option value="AND">AND</option>
           <option value="OR">OR</option>
@@ -332,20 +429,27 @@
       </div>
       
       <div class="form-group">
-        <label for="trigger_sequence">Trigger Sequence Count:</label>
+        <label for="trigger_sequence">
+          Trigger Sequence Count:
+          <span class="help-tooltip" title="How many times in a row an event must evaluate as true to be considered triggered. Helps reduce false positives">?</span>
+        </label>
         <input id="trigger_sequence" type="number" bind:value={config.trigger_sequence_count} min="1" />
       </div>
       
-      <div class="form-group">
+      <div class="form-group checkbox-group">
         <label>
           <input type="checkbox" bind:checked={config.require_rule_reset} />
           Require Rule Reset
+          <span class="help-tooltip" title="When enabled, an event won't trigger again until rules evaluate to false, then true again. Useful for detecting state changes">?</span>
         </label>
       </div>
       
       {#if config.require_rule_reset}
         <div class="form-group">
-          <label for="rule_reset_count">Rule Reset Count:</label>
+          <label for="rule_reset_count">
+            Rule Reset Count:
+            <span class="help-tooltip" title="How many consecutive times rules must evaluate to false before the event can be re-triggered">?</span>
+          </label>
           <input id="rule_reset_count" type="number" bind:value={config.rule_reset_count} min="1" />
         </div>
       {/if}
@@ -356,7 +460,42 @@
       {#each config.rules as rule, index}
         <div class="rule-item">
           <h3>Rule {index + 1}: {rule.type}</h3>
-          <p>Camera: {rule.camera || 'N/A'}</p>
+          {#if rule.camera}
+            <p>Camera: {rule.camera}</p>
+          {/if}
+          {#if rule.detector}
+            <p>Detector: {rule.detector}</p>
+          {/if}
+          {#if rule.classifier}
+            <p>Classifier: {rule.classifier}</p>
+          {/if}
+          {#if rule.tracker}
+            <p>Tracker: {rule.tracker}</p>
+          {/if}
+          {#if rule.resource}
+            <p>Resource: {rule.resource}</p>
+          {/if}
+          {#if rule.method}
+            <p>Method: {rule.method}</p>
+          {/if}
+          {#if rule.payload}
+            <p>Payload: {rule.payload}</p>
+          {/if}
+          {#if rule.result_path}
+            <p>Result Path: {rule.result_path}</p>
+          {/if}
+          {#if rule.result_function}
+            <p>Result Function: {rule.result_function}</p>
+          {/if}
+          {#if rule.result_operator}
+            <p>Result Operator: {rule.result_operator}</p>
+          {/if}
+          {#if rule.result_value}
+            <p>Result Value: {rule.result_value}</p>
+          {/if}
+          {#if rule.inverse_pause_secs}
+            <p>Inverse Pause: {rule.inverse_pause_secs} seconds</p>
+          {/if}
           {#if rule.class_regex}
             <p>Class Regex: {rule.class_regex}</p>
           {/if}
@@ -468,8 +607,63 @@
             </div>
             
             <div class="form-group">
-              <label for="payload">Payload:</label>
-              <input id="payload" type="text" bind:value={newRule.payload} placeholder="JSON payload" />
+              <label for="payload">Payload (JSON):</label>
+              <input id="payload" type="text" bind:value={newRule.payload} placeholder="JSON object, e.g. 'key': 'value'" />
+            </div>
+            
+            <div class="form-group">
+              <label for="result_path">
+                Result Path (optional):
+                <span class="help-tooltip" title="JavaScript dot notation path to access a property in the result. Example: 'data.value' or 'items.0.name'">?</span>
+              </label>
+              <input id="result_path" type="text" bind:value={newRule.result_path} placeholder="e.g., data.value" />
+            </div>
+            
+            <div class="form-group">
+              <label for="result_function">
+                Result Function (optional):
+                <span class="help-tooltip" title="Function to apply to the result before comparison. 'len' for length, 'any' for checking if any item is truthy">?</span>
+              </label>
+              <select id="result_function" bind:value={newRule.result_function}>
+                <option value="">None</option>
+                <option value="len">len</option>
+                <option value="any">any</option>
+              </select>
+            </div>
+            
+            <div class="form-group">
+              <label for="result_operator">
+                Result Operator:
+                <span class="help-tooltip" title="Operator to use when comparing the result with the result value">?</span>
+              </label>
+              <select id="result_operator" bind:value={newRule.result_operator}>
+                <option value="">Select operator</option>
+                <option value="eq">Equal (eq)</option>
+                <option value="ne">Not Equal (ne)</option>
+                <option value="lt">Less Than (lt)</option>
+                <option value="lte">Less Than or Equal (lte)</option>
+                <option value="gt">Greater Than (gt)</option>
+                <option value="gte">Greater Than or Equal (gte)</option>
+                <option value="regex">Regex Match (regex)</option>
+                <option value="in">In (in)</option>
+                <option value="hasattr">Has Attribute (hasattr)</option>
+              </select>
+            </div>
+            
+            <div class="form-group">
+              <label for="result_value">
+                Result Value:
+                <span class="help-tooltip" title="Value to compare against using the selected operator">?</span>
+              </label>
+              <input id="result_value" type="text" bind:value={newRule.result_value} placeholder="Value to compare against" />
+            </div>
+            
+            <div class="form-group">
+              <label for="inverse_pause_secs">
+                Inverse Pause (seconds, optional):
+                <span class="help-tooltip" title="Duration to pause event evaluation when the result evaluates to false">?</span>
+              </label>
+              <input id="inverse_pause_secs" type="number" bind:value={newRule.inverse_pause_secs} min="0" placeholder="Pause duration when result is false" />
             </div>
           {/if}
           
@@ -511,10 +705,23 @@
             </select>
           </div>
           
-          <div class="form-group">
-            <label for="to">To (comma-separated):</label>
-            <input id="to" type="text" bind:value={newNotification.to} placeholder="phone@example.com, +1234567890" />
-          </div>
+          {#if newNotification.type === 'sms' || newNotification.type === 'email'}
+            <div class="form-group">
+              <label for="preset">
+                Preset:
+                <span class="help-tooltip" title="Name of the preset message template to use for this notification type">?</span>
+              </label>
+              <input id="preset" type="text" bind:value={newNotification.preset} placeholder="e.g., twilio_sms" />
+            </div>
+
+            <div class="form-group">
+              <label for="to">
+                To (comma-separated):
+                <span class="help-tooltip" title="Phone numbers for SMS or email addresses for email, separated by commas">?</span>
+              </label>
+              <input id="to" type="text" bind:value={newNotification.to} placeholder="phone@example.com, +1234567890" />
+            </div>
+          {/if}
           
           {#if newNotification.type === 'webhook_get'}
             <div class="form-group">
@@ -586,17 +793,23 @@
           </div>
           
           <div class="form-group">
-            <label for="action_payload">Payload:</label>
-            <input id="action_payload" type="text" bind:value={newAction.payload} placeholder="JSON payload" />
+            <label for="action_payload">Payload (JSON):</label>
+            <input id="action_payload" type="text" bind:value={newAction.payload} placeholder="JSON object, e.g. 'key': 'value'" />
           </div>
           
           <div class="form-group">
-            <label for="when_secs">Delay (seconds):</label>
+            <label for="when_secs">
+              Delay (seconds):
+              <span class="help-tooltip" title="How many seconds after the event triggers should this action occur. Use -1 to disable automatic execution">?</span>
+            </label>
             <input id="when_secs" type="number" bind:value={newAction.when_secs} min="-1" />
           </div>
           
           <div class="form-group">
-            <label for="response_match">Response Match (regex):</label>
+            <label for="response_match">
+              Response Match (regex):
+              <span class="help-tooltip" title="If a response matches this regex pattern, this action will be triggered. Leave empty for no response matching">?</span>
+            </label>
             <input id="response_match" type="text" bind:value={newAction.response_match} placeholder="optional" />
           </div>
           
@@ -607,6 +820,24 @@
         </div>
       {:else}
         <button class="btn btn-primary" on:click={() => showAddAction = true}>Add Action</button>
+      {/if}
+    </div>
+
+    <div class="form-section">
+      <h2>Auto-Managed Resources</h2>
+      <p class="help-text">Resources are automatically added based on what's referenced in your rules and actions.</p>
+      
+      {#if config.resources && Object.keys(config.resources).length > 0}
+        <div class="resources-list">
+          {#each Object.entries(config.resources) as [name, resource]}
+            <div class="resource-item">
+              <span class="resource-name">{name}</span>
+              <span class="resource-type">{resource.type}:{resource.subtype}</span>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <p class="empty-resources">No resources referenced yet. Add rules or actions to see resources here.</p>
       {/if}
     </div>
 
@@ -748,6 +979,7 @@
     margin-bottom: 5px;
     font-weight: 500;
     color: #495057;
+    position: relative;
   }
 
   .form-group input,
@@ -757,6 +989,7 @@
     border: 1px solid #ced4da;
     border-radius: 4px;
     font-size: 14px;
+    box-sizing: border-box;
   }
 
   .form-group input:focus,
@@ -764,6 +997,26 @@
     outline: none;
     border-color: #007bff;
     box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+  }
+
+  /* Checkbox alignment */
+  .checkbox-group {
+    display: flex;
+    align-items: flex-start;
+  }
+
+  .checkbox-group label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    margin: 0;
+  }
+
+  .checkbox-group input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    flex-shrink: 0;
   }
 
   .btn {
@@ -860,5 +1113,160 @@
     color: #6c757d;
     font-size: 12px;
     margin-top: 5px;
+  }
+
+  /* Tooltip Styles */
+  .help-tooltip {
+    margin-left: 5px;
+    color: #007bff;
+    cursor: pointer;
+    text-decoration: none;
+    position: relative;
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    line-height: 14px;
+    border-radius: 50%;
+    background-color: #007bff;
+    color: white;
+    font-size: 10px;
+    text-align: center;
+    vertical-align: middle;
+    transition: background-color 0.2s ease;
+    user-select: none;
+  }
+
+  .help-tooltip:hover {
+    text-decoration: none;
+    background-color: #0056b3;
+  }
+
+  .help-tooltip::after {
+    content: "?";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-weight: bold;
+  }
+
+  .tooltip-popup {
+    position: absolute;
+    background: #333;
+    color: white;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    max-width: 250px;
+    z-index: 1000;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    white-space: normal;
+    line-height: 1.4;
+    top: 25px;
+    left: 0;
+    min-width: 200px;
+  }
+
+  .tooltip-popup::before {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: 10px;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 4px solid #333;
+  }
+
+  /* Fix form overflow */
+  .form-group input,
+  .form-group select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 14px;
+    box-sizing: border-box;
+  }
+
+  .form-group input:focus,
+  .form-group select:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+  }
+
+  /* Make tooltips appear instantly */
+  [title] {
+    transition-delay: 0s !important;
+    --tooltip-delay: 0s;
+  }
+
+  /* Override browser tooltip delay */
+  *[title]:hover::after {
+    transition-delay: 0s !important;
+    animation-delay: 0s !important;
+  }
+
+  /* Try to reduce tooltip delay */
+  .help-tooltip {
+    margin-left: 5px;
+    color: #007bff;
+    cursor: help;
+    text-decoration: none;
+    position: relative;
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    line-height: 14px;
+    border-radius: 50%;
+    background-color: #007bff;
+    color: white;
+    font-size: 10px;
+    text-align: center;
+    vertical-align: middle;
+    transition: background-color 0.2s ease;
+    user-select: none;
+    /* Try to reduce tooltip delay */
+    -webkit-tooltip-delay: 0s;
+    tooltip-delay: 0s;
+  }
+
+  /* New styles for resource display */
+  .resources-list {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #e9ecef;
+  }
+
+  .resources-list h3 {
+    margin-top: 0;
+    color: #495057;
+    font-size: 16px;
+    margin-bottom: 10px;
+  }
+
+  .resource-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #f1f3f5;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    font-size: 14px;
+    color: #343a40;
+  }
+
+  .resource-name {
+    font-weight: 500;
+    color: #007bff;
+  }
+
+  .resource-type {
+    font-size: 12px;
+    color: #6c757d;
   }
 </style>
