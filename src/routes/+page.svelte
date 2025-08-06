@@ -378,6 +378,12 @@
 
   function saveEvent() {
     if (editingEventIndex !== null && editingEvent) {
+      // Validate video capture settings
+      if (editingEvent.capture_video && !editingEvent.video_capture_resource) {
+        alert("Please select a video capture resource when video capture is enabled.");
+        return;
+      }
+      
       // Convert modes text back to array
       editingEvent.modes = eventModesText.split(',').map(s => s.trim()).filter(Boolean);
       config.events[editingEventIndex] = { ...editingEvent };
@@ -846,29 +852,44 @@
                     <h4>Basic Settings</h4>
                     <div class="form-row">
                       <div class="form-group">
-                        <label for="event_name">Event Name:</label>
+                        <label for="event_name">
+                          Event Name:
+                          <span class="help-tooltip" title="A descriptive name for this event that will be used in notifications and logs.">?</span>
+                        </label>
                         <input id="event_name" type="text" bind:value={editingEvent.name} />
                       </div>
                       <div class="form-group">
-                        <label for="event_pause">Pause Alerting (seconds):</label>
+                        <label for="event_pause">
+                          Pause Alerting (seconds):
+                          <span class="help-tooltip" title="After an event is triggered, wait this many seconds before allowing new notifications for the same event.">?</span>
+                        </label>
                         <input id="event_pause" type="number" bind:value={editingEvent.pause_alerting_on_event_secs} min="0" />
                       </div>
                     </div>
                     
                     <div class="form-row">
                       <div class="form-group">
-                        <label for="event_detection_hz">Detection Frequency (Hz):</label>
+                        <label for="event_detection_hz">
+                          Detection Frequency (Hz):
+                          <span class="help-tooltip" title="How frequently to check the rules (times per second). Higher values use more resources but provide faster response.">?</span>
+                        </label>
                         <input id="event_detection_hz" type="number" bind:value={editingEvent.detection_hz} min="1" max="60" />
                       </div>
                       <div class="form-group">
-                        <label for="event_trigger_count">Trigger Sequence Count:</label>
+                        <label for="event_trigger_count">
+                          Trigger Sequence Count:
+                          <span class="help-tooltip" title="The rules must be met this many times in a row before the event is triggered. Use 1 for immediate triggering.">?</span>
+                        </label>
                         <input id="event_trigger_count" type="number" bind:value={editingEvent.trigger_sequence_count} min="1" />
                       </div>
                     </div>
                     
                     <div class="form-row">
                       <div class="form-group">
-                        <label for="event_logic_type">Rule Logic Type:</label>
+                        <label for="event_logic_type">
+                          Rule Logic Type:
+                          <span class="help-tooltip" title="How to combine multiple rules: AND (all rules must be met), OR (any rule can trigger), XOR (exactly one rule), etc.">?</span>
+                        </label>
                         <select id="event_logic_type" bind:value={editingEvent.rule_logic_type}>
                           <option value="AND">AND</option>
                           <option value="OR">OR</option>
@@ -879,7 +900,10 @@
                         </select>
                       </div>
                       <div class="form-group">
-                        <label for="event_modes">Modes (comma-separated):</label>
+                        <label for="event_modes">
+                          Modes (comma-separated):
+                          <span class="help-tooltip" title="Only trigger this event when the system is in these modes (e.g., 'active, night'). Leave empty to always trigger.">?</span>
+                        </label>
                         <input id="event_modes" type="text" bind:value={eventModesText} placeholder="active, inactive" />
                       </div>
                     </div>
@@ -889,11 +913,15 @@
                         <label>
                           <input type="checkbox" bind:checked={editingEvent.require_rule_reset} />
                           Require Rule Reset
+                          <span class="help-tooltip" title="When enabled, an event that has been triggered will not trigger again until its rules evaluate to false for the specified number of times, then evaluate to true again. This is useful for detecting true state changes rather than continuous states (e.g., detecting when someone sits at a desk, then leaves, then returns).">?</span>
                         </label>
                       </div>
                       {#if editingEvent.require_rule_reset}
                         <div class="form-group">
-                          <label for="event_reset_count">Rule Reset Count:</label>
+                          <label for="event_reset_count">
+                            Rule Reset Count:
+                            <span class="help-tooltip" title="How many times a rule can fail before the trigger sequence count resets to 0.">?</span>
+                          </label>
                           <input id="event_reset_count" type="number" bind:value={editingEvent.rule_reset_count} min="1" />
                         </div>
                       {/if}
@@ -904,15 +932,27 @@
                         <label>
                           <input type="checkbox" bind:checked={editingEvent.capture_video} />
                           Capture Video
+                          <span class="help-tooltip" title="If enabled and a video_capture_resource is configured, video will be captured for triggered events.">?</span>
                         </label>
                       </div>
                       {#if editingEvent.capture_video}
                         <div class="form-group">
-                          <label for="event_video_resource">Video Capture Resource:</label>
-                          <input id="event_video_resource" type="text" bind:value={editingEvent.video_capture_resource} placeholder="camera_name" />
+                          <label for="event_video_resource">
+                            Video Capture Resource:
+                            <span class="help-tooltip" title="The camera resource to use for video capture when this event is triggered.">?</span>
+                          </label>
+                          <select id="event_video_resource" bind:value={editingEvent.video_capture_resource} required>
+                            <option value="">Select a camera</option>
+                            {#each cameras as cameraName}
+                              <option value={cameraName}>{cameraName}</option>
+                            {/each}
+                          </select>
                         </div>
                         <div class="form-group">
-                          <label for="event_video_padding">Video Capture Padding (seconds):</label>
+                          <label for="event_video_padding">
+                            Video Capture Padding (seconds):
+                            <span class="help-tooltip" title="Seconds of video to include before and after the event trigger (e.g., 10 = 10 seconds before + 10 seconds after).">?</span>
+                          </label>
                           <input id="event_video_padding" type="number" bind:value={editingEvent.event_video_capture_padding_secs} min="0" />
                         </div>
                       {/if}
@@ -1107,7 +1147,10 @@
     <div class="add-form">
       <h5>Add New Rule</h5>
       <div class="form-group">
-        <label for="rule_type">Rule Type:</label>
+        <label for="rule_type">
+          Rule Type:
+          <span class="help-tooltip" title="The type of rule to evaluate: Detection (object detection), Classification (object classification), Tracker (object tracking), Time (time-based), Call (method call on resource)">?</span>
+        </label>
         <select id="rule_type" bind:value={newRule.type}>
           <option value="detection">Detection</option>
           <option value="classification">Classification</option>
@@ -1119,7 +1162,10 @@
       
       {#if ['detection', 'classification', 'tracker'].includes(newRule.type)}
         <div class="form-group">
-          <label for="camera">Camera:</label>
+          <label for="camera">
+            Camera:
+            <span class="help-tooltip" title="The camera resource to use for vision-based rules">?</span>
+          </label>
           <select id="camera" bind:value={newRule.camera}>
             <option value="">Select a camera</option>
             {#each cameras as cameraName}
@@ -1130,7 +1176,10 @@
         
         {#if newRule.type === 'detection'}
           <div class="form-group">
-            <label for="detector">Detector:</label>
+            <label for="detector">
+              Detector:
+              <span class="help-tooltip" title="The vision service that performs object detection">?</span>
+            </label>
             <select id="detector" bind:value={newRule.detector}>
               <option value="">Select a vision service</option>
               {#each visionServices as serviceName}
@@ -1142,7 +1191,10 @@
         
         {#if newRule.type === 'classification'}
           <div class="form-group">
-            <label for="classifier">Classifier:</label>
+            <label for="classifier">
+              Classifier:
+              <span class="help-tooltip" title="The vision service that performs object classification">?</span>
+            </label>
              <select id="classifier" bind:value={newRule.classifier}>
               <option value="">Select a vision service</option>
               {#each visionServices as serviceName}
@@ -1154,7 +1206,10 @@
         
         {#if newRule.type === 'tracker'}
           <div class="form-group">
-            <label for="tracker">Tracker:</label>
+            <label for="tracker">
+              Tracker:
+              <span class="help-tooltip" title="The vision service that performs object tracking">?</span>
+            </label>
             <select id="tracker" bind:value={newRule.tracker}>
               <option value="">Select a vision service</option>
               {#each visionServices as serviceName}
@@ -1165,19 +1220,28 @@
         {/if}
         
         <div class="form-group">
-          <label for="class_regex">Class Regex:</label>
+          <label for="class_regex">
+            Class Regex:
+            <span class="help-tooltip" title="Regular expression to match detected/classified object names (e.g., 'Person', '.*' for any object)">?</span>
+          </label>
           <input id="class_regex" type="text" bind:value={newRule.class_regex} placeholder=".*" />
         </div>
         
         <div class="form-group">
-          <label for="confidence_pct">Confidence %:</label>
+          <label for="confidence_pct">
+            Confidence %:
+            <span class="help-tooltip" title="Minimum confidence threshold (0.0 to 1.0) for the detection/classification to be considered valid">?</span>
+          </label>
           <input id="confidence_pct" type="number" bind:value={newRule.confidence_pct} min="0" max="1" step="0.1" />
         </div>
       {/if}
       
       {#if newRule.type === 'call'}
         <div class="form-group">
-          <label for="resource">Resource:</label>
+          <label for="resource">
+            Resource:
+            <span class="help-tooltip" title="The Viam resource (component or service) to call a method on">?</span>
+          </label>
           <select id="resource" bind:value={newRule.resource}>
             <option value="">Select a resource</option>
             {#each allResources as resourceName}
@@ -1187,7 +1251,10 @@
         </div>
         
         <div class="form-group">
-          <label for="method">Method:</label>
+          <label for="method">
+            Method:
+            <span class="help-tooltip" title="The method to call on the selected resource">?</span>
+          </label>
           <select id="method" bind:value={newRule.method} disabled={!newRule.resource}>
             <option value="">Select a method</option>
             {#each callRuleMethods as methodName}
@@ -1197,7 +1264,10 @@
         </div>
         
         <div class="form-group">
-          <label for="payload">Payload (JSON):</label>
+          <label for="payload">
+            Payload (JSON):
+            <span class="help-tooltip" title="JSON payload to send with the method call (e.g., 'key': 'value')">?</span>
+          </label>
           <input id="payload" type="text" bind:value={newRule.payload} placeholder="JSON object, e.g. 'key': 'value'" />
         </div>
       {/if}
@@ -1270,7 +1340,10 @@
     <div class="add-form">
       <h5>Add New Action</h5>
       <div class="form-group">
-        <label for="action_resource">Resource:</label>
+        <label for="action_resource">
+          Resource:
+          <span class="help-tooltip" title="The Viam resource (component or service) to call a method on when the action is triggered">?</span>
+        </label>
         <select id="action_resource" bind:value={newAction.resource}>
           <option value="">Select a resource</option>
           {#each allResources as resourceName}
@@ -1280,7 +1353,10 @@
       </div>
       
       <div class="form-group">
-        <label for="action_method">Method:</label>
+        <label for="action_method">
+          Method:
+          <span class="help-tooltip" title="The method to call on the selected resource when the action is triggered">?</span>
+        </label>
         <select id="action_method" bind:value={newAction.method} disabled={!newAction.resource}>
           <option value="">Select a method</option>
           {#each actionMethods as methodName}
@@ -1290,17 +1366,26 @@
       </div>
       
       <div class="form-group">
-        <label for="action_payload">Payload (JSON):</label>
+        <label for="action_payload">
+          Payload (JSON):
+          <span class="help-tooltip" title="JSON payload to send with the method call (e.g., 'key': 'value')">?</span>
+        </label>
         <input id="action_payload" type="text" bind:value={newAction.payload} placeholder="JSON object, e.g. 'key': 'value'" />
       </div>
       
       <div class="form-group">
-        <label for="when_secs">Delay (seconds):</label>
+        <label for="when_secs">
+          Delay (seconds):
+          <span class="help-tooltip" title="Number of seconds to wait before executing this action. Use 0 for immediate execution, -1 for no delay.">?</span>
+        </label>
         <input id="when_secs" type="number" bind:value={newAction.when_secs} min="-1" />
       </div>
       
       <div class="form-group">
-        <label for="response_match">Response Match (regex):</label>
+        <label for="response_match">
+          Response Match (regex):
+          <span class="help-tooltip" title="Optional regex pattern to match against the method response. Action only executes if response matches this pattern.">?</span>
+        </label>
         <input id="response_match" type="text" bind:value={newAction.response_match} placeholder="optional" />
       </div>
       
@@ -1318,7 +1403,10 @@
     <div class="add-form">
       <h5>Edit Rule</h5>
       <div class="form-group">
-        <label for="edit_rule_type">Rule Type:</label>
+        <label for="edit_rule_type">
+          Rule Type:
+          <span class="help-tooltip" title="The type of rule to evaluate: Detection (object detection), Classification (object classification), Tracker (object tracking), Time (time-based), Call (method call on resource)">?</span>
+        </label>
         <select id="edit_rule_type" bind:value={editingRule.type}>
           <option value="detection">Detection</option>
           <option value="classification">Classification</option>
@@ -1330,7 +1418,10 @@
       
       {#if ['detection', 'classification', 'tracker'].includes(editingRule.type)}
         <div class="form-group">
-          <label for="edit_camera">Camera:</label>
+          <label for="edit_camera">
+            Camera:
+            <span class="help-tooltip" title="The camera resource to use for vision-based rules">?</span>
+          </label>
           <select id="edit_camera" bind:value={editingRule.camera}>
             <option value="">Select a camera</option>
             {#each cameras as cameraName}
@@ -1341,7 +1432,10 @@
         
         {#if editingRule.type === 'detection'}
           <div class="form-group">
-            <label for="edit_detector">Detector:</label>
+            <label for="edit_detector">
+              Detector:
+              <span class="help-tooltip" title="The vision service that performs object detection">?</span>
+            </label>
             <select id="edit_detector" bind:value={editingRule.detector}>
               <option value="">Select a vision service</option>
               {#each visionServices as serviceName}
@@ -1353,7 +1447,10 @@
         
         {#if editingRule.type === 'classification'}
           <div class="form-group">
-            <label for="edit_classifier">Classifier:</label>
+            <label for="edit_classifier">
+              Classifier:
+              <span class="help-tooltip" title="The vision service that performs object classification">?</span>
+            </label>
              <select id="edit_classifier" bind:value={editingRule.classifier}>
               <option value="">Select a vision service</option>
               {#each visionServices as serviceName}
@@ -1365,7 +1462,10 @@
         
         {#if editingRule.type === 'tracker'}
           <div class="form-group">
-            <label for="edit_tracker">Tracker:</label>
+            <label for="edit_tracker">
+              Tracker:
+              <span class="help-tooltip" title="The vision service that performs object tracking">?</span>
+            </label>
             <select id="edit_tracker" bind:value={editingRule.tracker}>
               <option value="">Select a vision service</option>
               {#each visionServices as serviceName}
@@ -1376,19 +1476,28 @@
         {/if}
         
         <div class="form-group">
-          <label for="edit_class_regex">Class Regex:</label>
+          <label for="edit_class_regex">
+            Class Regex:
+            <span class="help-tooltip" title="Regular expression to match detected/classified object names (e.g., 'Person', '.*' for any object)">?</span>
+          </label>
           <input id="edit_class_regex" type="text" bind:value={editingRule.class_regex} placeholder=".*" />
         </div>
         
         <div class="form-group">
-          <label for="edit_confidence_pct">Confidence %:</label>
+          <label for="edit_confidence_pct">
+            Confidence %:
+            <span class="help-tooltip" title="Minimum confidence threshold (0.0 to 1.0) for the detection/classification to be considered valid">?</span>
+          </label>
           <input id="edit_confidence_pct" type="number" bind:value={editingRule.confidence_pct} min="0" max="1" step="0.1" />
         </div>
       {/if}
       
       {#if editingRule.type === 'call'}
         <div class="form-group">
-          <label for="edit_resource">Resource:</label>
+          <label for="edit_resource">
+            Resource:
+            <span class="help-tooltip" title="The Viam resource (component or service) to call a method on">?</span>
+          </label>
           <select id="edit_resource" bind:value={editingRule.resource}>
             <option value="">Select a resource</option>
             {#each allResources as resourceName}
@@ -1398,7 +1507,10 @@
         </div>
         
         <div class="form-group">
-          <label for="edit_method">Method:</label>
+          <label for="edit_method">
+            Method:
+            <span class="help-tooltip" title="The method to call on the selected resource">?</span>
+          </label>
           <select id="edit_method" bind:value={editingRule.method} disabled={!editingRule.resource}>
             <option value="">Select a method</option>
             {#each callRuleMethods as methodName}
@@ -1408,7 +1520,10 @@
         </div>
         
         <div class="form-group">
-          <label for="edit_payload">Payload (JSON):</label>
+          <label for="edit_payload">
+            Payload (JSON):
+            <span class="help-tooltip" title="JSON payload to send with the method call (e.g., 'key': 'value')">?</span>
+          </label>
           <input id="edit_payload" type="text" bind:value={editingRule.payload} placeholder="JSON object, e.g. 'key': 'value'" />
         </div>
       {/if}
